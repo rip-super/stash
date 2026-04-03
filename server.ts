@@ -85,6 +85,36 @@ app.post("/stash/:id/auth", async c => {
     return c.json({ token });
 });
 
+app.get("/stash/:id/metadata", async c => {
+    const id = c.req.param("id");
+    const token = c.req.header("Authorization")?.slice(7);
+    const session = sessions.get(token ?? "");
+
+    if (!session || session.stashId !== id || Date.now() > session.expiresAt) {
+        return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const path = join("./stashes", id, "metadata.bin");
+    if (!existsSync(path)) return c.json({ error: "No metadata yet" }, 404);
+
+    const data = await readFile(path);
+    return new Response(data, { headers: { "Content-Type": "application/octet-stream" } });
+});
+
+app.put("/stash/:id/metadata", async c => {
+    const id = c.req.param("id");
+    const token = c.req.header("Authorization")?.slice(7);
+    const session = sessions.get(token ?? "");
+    if (!session || session.stashId !== id || Date.now() > session.expiresAt) {
+        return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const data = await c.req.arrayBuffer();
+    await writeFile(join("./stashes", id, "metadata.bin"), Buffer.from(data));
+
+    return c.json({ ok: true });
+});
+
 serve({ fetch: app.fetch, port: 6003 }, info => {
     console.log(`Listening at http://localhost:${info.port}`);
 });
