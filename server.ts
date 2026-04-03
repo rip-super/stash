@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
+import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 interface StashRecord {
     id: string;
@@ -16,6 +17,9 @@ interface Registry {
 }
 
 const app = new Hono();
+
+const challenges = new Map<string, { nonce: string, expiresAt: number }>();
+const sessions = new Map<string, { stashId: string, expiresAt: number }>();
 
 await mkdir("./stashes", { recursive: true });
 if (!existsSync(join("./stashes", "registry.json"))) {
@@ -41,6 +45,44 @@ app.post("/stash", async c => {
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true }, 201);
+});
+
+app.get("/stash/:id/challenge", async c => {
+    const id = c.req.param("id");
+
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+
+    const nonce = randomBytes(32).toString("hex");
+    challenges.set(id, { nonce, expiresAt: Date.now() + 2 * 60 * 1000 });
+
+    return c.json({ nonce });
+});
+
+app.post("/stash/:id/auth", async c => {
+    const id = c.req.param("id");
+
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+
+    const challenge = challenges.get(id);
+    if (!challenge || Date.now() > challenge.expiresAt) {
+        challenges.delete(id);
+        return c.json({ error: "No active challenge" }, 400);
+    }
+
+    const { response } = await c.req.json<{ response: string }>();
+    const expected = createHmac("sha256", Buffer.from(reg.stashes[id].authVerifier, "base64")).update(challenge.nonce).digest("hex");
+
+    if (!timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(response, "hex"))) {
+        return c.json({ error: "Invalid auth response" }, 401);
+    }
+
+    challenges.delete(id);
+    const token = randomBytes(32).toString("hex");
+    sessions.set(token, { stashId: id, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+
+    return c.json({ token });
 });
 
 serve({ fetch: app.fetch, port: 6003 }, info => {
