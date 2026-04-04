@@ -20,6 +20,9 @@ const app = new Hono();
 
 const challenges = new Map<string, { nonce: string, expiresAt: number }>();
 const sessions = new Map<string, { stashId: string, expiresAt: number }>();
+const accessCodes = new Map<string, { stashId: string, expiresAt: number }>();
+
+const QUOTA = 500 * 1024 * 1024;
 
 await mkdir("./stashes", { recursive: true });
 if (!existsSync(join("./stashes", "registry.json"))) {
@@ -91,6 +94,41 @@ app.post("/stash/:id/auth", async c => {
     return c.json({ token });
 });
 
+app.get("/stash/:id/recovery", async c => {
+    const id = c.req.param("id");
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+
+    const data = await readFile(join("./stashes", id, "recovery.json"), "utf-8");
+    return c.json(JSON.parse(data));
+});
+
+app.post("/stash/:id/access-code", async c => {
+    const id = c.req.param("id");
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    for (const [k, v] of accessCodes) if (v.stashId === id) accessCodes.delete(k);
+
+    const code = randomBytes(3).toString("hex").toUpperCase();
+    accessCodes.set(code, { stashId: id, expiresAt: Date.now() + 10 * 60 * 1000 });
+
+    return c.json({ code, expiresIn: 600 });
+});
+
+app.post("/stash/join/:token", async c => {
+    const code = c.req.param("token").toUpperCase();
+    const entry = accessCodes.get(code);
+
+    if (!entry || Date.now() > entry.expiresAt) {
+        accessCodes.delete(code);
+        return c.json({ error: "Invalid or expired code" }, 404);
+    }
+
+    accessCodes.delete(code);
+    const recovery = JSON.parse(await readFile(join("./stashes", entry.stashId, "recovery.json"), "utf-8"));
+    return c.json({ stashId: entry.stashId, recovery });
+});
+
 app.get("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
 
@@ -121,7 +159,7 @@ app.post("/stash/:id/blob", async c => {
 
     const data = await c.req.arrayBuffer();
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
-    if (reg.stashes[id].quotaUsed + data.byteLength > 50_000) {
+    if (reg.stashes[id].quotaUsed + data.byteLength > QUOTA) {
         return c.json({ error: "Quota exceeded" }, 413);
     }
 
