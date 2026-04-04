@@ -1,6 +1,6 @@
-import { Hono } from "hono";
+import { Hono, Context } from "hono";
 import { serve } from "@hono/node-server";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -24,6 +24,12 @@ const sessions = new Map<string, { stashId: string, expiresAt: number }>();
 await mkdir("./stashes", { recursive: true });
 if (!existsSync(join("./stashes", "registry.json"))) {
     await writeFile(join("./stashes", "registry.json"), JSON.stringify({ stashes: {} }, null, 4));
+}
+
+function auth(c: Context, id: string) {
+    const token = c.req.header("Authorization")?.slice(7);
+    const session = sessions.get(token ?? "");
+    return session && session.stashId === id && Date.now() <= session.expiresAt;
 }
 
 app.post("/stash", async c => {
@@ -87,12 +93,8 @@ app.post("/stash/:id/auth", async c => {
 
 app.get("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
-    const token = c.req.header("Authorization")?.slice(7);
-    const session = sessions.get(token ?? "");
 
-    if (!session || session.stashId !== id || Date.now() > session.expiresAt) {
-        return c.json({ error: "Unauthorized" }, 401);
-    }
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
     const path = join("./stashes", id, "metadata.bin");
     if (!existsSync(path)) return c.json({ error: "No metadata yet" }, 404);
@@ -103,14 +105,60 @@ app.get("/stash/:id/metadata", async c => {
 
 app.put("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
-    const token = c.req.header("Authorization")?.slice(7);
-    const session = sessions.get(token ?? "");
-    if (!session || session.stashId !== id || Date.now() > session.expiresAt) {
-        return c.json({ error: "Unauthorized" }, 401);
-    }
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
     const data = await c.req.arrayBuffer();
     await writeFile(join("./stashes", id, "metadata.bin"), Buffer.from(data));
+
+    return c.json({ ok: true });
+});
+
+app.post("/stash/:id/blob", async c => {
+    const id = c.req.param("id");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const data = await c.req.arrayBuffer();
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    if (reg.stashes[id].quotaUsed + data.byteLength > 50_000) {
+        return c.json({ error: "Quota exceeded" }, 413);
+    }
+
+    const blobId = randomBytes(16).toString("hex");
+    await writeFile(join("./stashes", id, "blobs", blobId), Buffer.from(data));
+    reg.stashes[id].quotaUsed += data.byteLength;
+    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 2));
+
+    return c.json({ blobId }, 201);
+});
+
+app.get("/stash/:id/blob/:blobId", async c => {
+    const id = c.req.param("id");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const path = join("./stashes", id, "blobs", c.req.param("blobId"));
+    if (!existsSync(path)) return c.json({ error: "Blob not found" }, 404);
+
+    const data = await readFile(path);
+    return new Response(data, { headers: { "Content-Type": "application/octet-stream" } });
+});
+
+app.delete("/stash/:id/blob/:blobId", async c => {
+    const id = c.req.param("id");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const path = join("./stashes", id, "blobs", c.req.param("blobId"));
+    if (!existsSync(path)) return c.json({ error: "Blob not found" }, 404);
+
+    const { size } = await stat(path);
+    await unlink(path);
+
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    reg.stashes[id].quotaUsed -= size;
+    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 2));
 
     return c.json({ ok: true });
 });
