@@ -1,5 +1,6 @@
 import { Hono, Context } from "hono";
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { readFile, writeFile, mkdir, stat, unlink } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -200,6 +201,8 @@ app.delete("/stash/:id/blob/:blobId", async c => {
 
     return c.json({ ok: true });
 });
+
+app.use("/*", serveStatic({ root: "./frontend" }));
 
 serve({ fetch: app.fetch, port: 6003 }, info => {
     console.log(`Listening at http://localhost:${info.port}`);
