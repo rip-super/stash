@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+    <h2>API Test</h2>
+
+    <button onclick="createStash()">1. Create Stash</button>
+    <button onclick="authenticate()">2. Auth</button>
+    <button onclick="generateCode()">3. Generate Access Code</button>
+    <button onclick="joinStash()">4. Join Stash</button>
+    <button onclick="putMetadata()">5. Put Metadata</button>
+    <button onclick="getMetadata()">6. Get Metadata</button>
+    <button onclick="uploadBlob()">7. Upload Blob</button>
+    <button onclick="downloadBlob()">8. Download Blob</button>
+    <button onclick="deleteBlob()">9. Delete Blob</button>
+    <button onclick="getRecovery()">10. Get Recovery</button>
+    <button onclick="document.getElementById('log').textContent = ''">Clear</button>
+
+    <pre id="log"></pre>
+
+    <script>
+        const API_URL = "http://localhost:6003";
+        let stashId, authVerifier, sessionToken, lastBlobId, accessCode;
+
+        function log(label, data) {
+            document.getElementById("log").textContent += `\n[${label}]\n${JSON.stringify(data, null, 2)}\n`;
+        }
+
+        async function createStash() {
+            stashId = crypto.randomUUID();
+            const rawKey = crypto.getRandomValues(new Uint8Array(32));
+            authVerifier = btoa(String.fromCharCode(...rawKey));
+            const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+            const encryptedKey = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(48))));
+
+            const res = await fetch(`${API_URL}/stash`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    id: stashId,
+                    authVerifier,
+                    recovery: {
+                        salt,
+                        kdfParams: { iterations: 100000, hash: "SHA-256" },
+                        encryptedKey
+                    }
+                })
+            }).then(r => r.json());
+
+            log("createStash", { stashId, authVerifier, ...res });
+        }
+
+        async function authenticate() {
+            const { nonce } = await fetch(`${API_URL}/stash/${stashId}/challenge`).then(r => r.json());
+
+            const key = await crypto.subtle.importKey(
+                "raw",
+                Uint8Array.from(atob(authVerifier), c => c.charCodeAt(0)),
+                { name: "HMAC", hash: "SHA-256" },
+                false, ["sign"]
+            );
+            const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(nonce));
+            const response = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+            const res = await fetch(`${API_URL}/stash/${stashId}/auth`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ response })
+            }).then(r => r.json());
+
+            sessionToken = res.token;
+            log("authenticate", res);
+        }
+
+        async function generateCode() {
+            const res = await fetch(`${API_URL}/stash/${stashId}/access-code`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${sessionToken}` }
+            }).then(r => r.json());
+
+            accessCode = res.code;
+            log("generateCode", res);
+        }
+
+        async function joinStash() {
+            const res = await fetch(`${API_URL}/stash/join/${accessCode}`, {
+                method: "POST"
+            }).then(r => r.json());
+
+            log("joinStash", res);
+        }
+
+        async function putMetadata() {
+            const fakeMetadata = crypto.getRandomValues(new Uint8Array(64));
+            const res = await fetch(`${API_URL}/stash/${stashId}/metadata`, {
+                method: "PUT",
+                headers: {
+                    "Authorization": `Bearer ${sessionToken}`,
+                    "Content-Type": "application/octet-stream"
+                },
+                body: fakeMetadata
+            }).then(r => r.json());
+
+            log("putMetadata", res);
+        }
+
+        async function getMetadata() {
+            const res = await fetch(`${API_URL}/stash/${stashId}/metadata`, {
+                headers: { "Authorization": `Bearer ${sessionToken}` }
+            }).then(r => r.arrayBuffer());
+
+            log("getMetadata", { bytes: res.byteLength });
+        }
+
+        async function uploadBlob() {
+            const fakeBlob = crypto.getRandomValues(new Uint8Array(128));
+            const res = await fetch(`${API_URL}/stash/${stashId}/blob`, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${sessionToken}`,
+                    "Content-Type": "application/octet-stream"
+                },
+                body: fakeBlob
+            }).then(r => r.json());
+
+            lastBlobId = res.blobId;
+            log("uploadBlob", res);
+        }
+
+        async function downloadBlob() {
+            const res = await fetch(`${API_URL}/stash/${stashId}/blob/${lastBlobId}`, {
+                headers: { "Authorization": `Bearer ${sessionToken}` }
+            }).then(r => r.arrayBuffer());
+
+            log("downloadBlob", { bytes: res.byteLength });
+        }
+
+        async function deleteBlob() {
+            const res = await fetch(`${API_URL}/stash/${stashId}/blob/${lastBlobId}`, {
+                method: "DELETE",
+                headers: { "Authorization": `Bearer ${sessionToken}` }
+            }).then(r => r.json());
+
+            log("deleteBlob", res);
+        }
+
+        async function getRecovery() {
+            const res = await fetch(`${API_URL}/stash/${stashId}/recovery`).then(r => r.json());
+            log("getRecovery", res);
+        }
+    </script>
+</body>
+
+</html>
