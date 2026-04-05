@@ -330,6 +330,10 @@ body::before {
     color: var(--text-primary);
 }
 
+.modal-overlay.closing {
+    animation: modalOut 0.15s ease-in forwards;
+}
+
 @keyframes slideUp {
     from {
         opacity: 0;
@@ -339,5 +343,12 @@ body::before {
     to {
         opacity: 1;
         transform: translateY(0);
+    }
+}
+
+@keyframes modalOut {
+    to {
+        opacity: 0;
+        transform: scale(0.95);
     }
 }

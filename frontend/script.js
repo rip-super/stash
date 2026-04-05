@@ -22,7 +22,10 @@ function openModal(html) {
 }
 
 function closeModal() {
-    document.getElementById("modal-overlay")?.remove();
+    const overlay = document.getElementById("modal-overlay");
+    if (!overlay) return;
+    overlay.classList.add("closing");
+    overlay.addEventListener("animationend", () => overlay.remove(), { once: true });
 }
 
 async function createStash() {
