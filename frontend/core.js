@@ -49,24 +49,39 @@ async function unwrapStashKey(encryptedKey, iv, wrappingKey) {
     );
 }
 
-// TODO: replace w/ BIP39
-const keyToPhrase = bytes => {
-    const b64 = toBase64(bytes);
-    const n = Math.ceil(b64.length / 4);
-    return [0, 1, 2, 3].map(i => b64.slice(i * n, (i + 1) * n)).join(" ");
+let bip39 = null;
+async function getBip39() {
+    if (!bip39) {
+        const [{ entropyToMnemonic, mnemonicToEntropy }, { wordlist }] = await Promise.all([
+            import("https://esm.sh/@scure/bip39@1.3.0"),
+            import("https://esm.sh/@scure/bip39@1.3.0/wordlists/english"),
+        ]);
+
+        bip39 = { entropyToMnemonic, mnemonicToEntropy, wordlist };
+    }
+
+    return bip39;
+}
+
+const keyToPhrase = async bytes => {
+    const { entropyToMnemonic, wordlist } = await getBip39();
+    return entropyToMnemonic(bytes.slice(0, 16), wordlist);
 };
-const phraseToBytes = phrase => fromBase64(phrase.replace(/\s+/g, ""));
+const phraseToBytes = async phrase => {
+    const { mnemonicToEntropy, wordlist } = await getBip39();
+    return new Uint8Array(mnemonicToEntropy(phrase.trim(), wordlist));
+};
 
 const getAuthVerifier = async stashKeyBytes => {
     const authKey = await deriveSubKey(stashKeyBytes, "stash:auth", ["encrypt", "decrypt"]);
     return toBase64(await exportKeyBytes(authKey));
 };
 
-async function apiCreateStash({ id, authVerifier, recovery }) {
+async function apiCreateStash({ id, authVerifier, recoveryId, recovery }) {
     const res = await fetch("/stash", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, authVerifier, recovery }),
+        body: JSON.stringify({ id, authVerifier, recoveryId, recovery }),
     });
 
     if (!res.ok) throw new Error((await res.json()).error);
@@ -112,5 +127,20 @@ async function apiJoinByCode(code) {
 async function apiGetRecovery(stashId) {
     const res = await fetch(`/stash/${stashId}/recovery`);
     if (!res.ok) throw new Error("Stash not found");
+    return res.json();
+}
+
+async function deriveRecoveryId(stashKeyBytes) {
+    const base = await crypto.subtle.importKey("raw", stashKeyBytes, { name: "HKDF" }, false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits(
+        { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: new TextEncoder().encode("stash:recovery-id") },
+        base, 128
+    );
+    return toHex(new Uint8Array(bits));
+}
+
+async function apiGetRecoveryByRecoveryId(recoveryId) {
+    const res = await fetch(`/recovery/${recoveryId}`);
+    if (!res.ok) throw new Error("Stash not found - check your phrase.");
     return res.json();
 }

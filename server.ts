@@ -9,6 +9,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 interface StashRecord {
     id: string;
     authVerifier: string;
+    recoveryId: string,
     quotaUsed: number;
     createdAt: number;
 }
@@ -37,13 +38,14 @@ function auth(c: Context, id: string) {
 }
 
 app.post("/stash", async c => {
-    const { id, authVerifier, recovery } = await c.req.json<{
+    const { id, authVerifier, recoveryId, recovery } = await c.req.json<{
         id: string,
         authVerifier: string,
+        recoveryId: string,
         recovery: { salt: string, kdfParams: object, iv: string, encryptedKey: string }
     }>();
 
-    if (!id || !authVerifier || !recovery) return c.json({ error: "Missing required fields" }, 400);
+    if (!id || !authVerifier || !recoveryId || !recovery) return c.json({ error: "Missing required fields" }, 400);
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     if (reg.stashes[id]) return c.json({ error: "Stash already exists" }, 409);
@@ -51,7 +53,7 @@ app.post("/stash", async c => {
     await mkdir(join("./stashes", id, "blobs"), { recursive: true });
     await writeFile(join("./stashes", id, "recovery.json"), JSON.stringify(recovery, null, 4));
 
-    reg.stashes[id] = { id, authVerifier, quotaUsed: 0, createdAt: Date.now() };
+    reg.stashes[id] = { id, authVerifier, recoveryId, quotaUsed: 0, createdAt: Date.now() };
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true }, 201);
@@ -102,6 +104,16 @@ app.get("/stash/:id/recovery", async c => {
 
     const data = await readFile(join("./stashes", id, "recovery.json"), "utf-8");
     return c.json(JSON.parse(data));
+});
+
+app.get("/recovery/:recoveryId", async c => {
+    const recoveryId = c.req.param("recoveryId");
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    const stash = Object.values(reg.stashes).find(s => s.recoveryId === recoveryId);
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    const data = JSON.parse(await readFile(join("./stashes", stash.id, "recovery.json"), "utf-8"));
+    return c.json({ stashId: stash.id, ...data });
 });
 
 app.post("/stash/:id/access-code", async c => {

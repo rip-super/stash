@@ -38,14 +38,18 @@ async function createStash() {
 
         const authVerifier = await getAuthVerifier(stashKeyBytes);
 
-        const phrase = keyToPhrase(stashKeyBytes);
+        const phrase = await keyToPhrase(stashKeyBytes);
         const salt = crypto.getRandomValues(new Uint8Array(32));
         const wrapKey = await deriveWrappingKey(phrase, salt);
         const { iv, encryptedKey } = await wrapStashKey(stashKey, wrapKey);
 
+        const phraseBytes = await phraseToBytes(phrase);
+        const recoveryId = await deriveRecoveryId(phraseBytes);
+
         await apiCreateStash({
             id: stashId,
             authVerifier,
+            recoveryId,
             recovery: { salt: toBase64(salt), kdfParams: { iterations: 200_000, hash: "SHA-256" }, iv, encryptedKey },
         });
 
@@ -69,18 +73,22 @@ function showRecoveryPhrase(phrase) {
             if you lose all your devices. It will not be shown again.
         </div>
         <div id="phrase-box" style="
-            background:rgba(139,126,200,0.07); border:1px solid rgba(139,126,200,0.2);
-            border-radius:0.65rem; padding:1rem; font-family:monospace; font-size:0.9rem;
-            color:#c4b8e8; line-height:1.8; word-break:break-all;
-            margin-bottom:1rem; user-select:text;
-        ">${phrase}</div>
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem;
+            background: rgba(139,126,200,0.07); border: 1px solid rgba(139,126,200,0.2);
+            border-radius: 0.65rem; padding: 1rem; margin-bottom: 1rem;
+        ">${phrase.split(" ").map(w => `
+            <span style="
+                font-family: monospace; font-size: 0.88rem;
+                color: #c4b8e8; text-align: center; padding: 0.25rem 0;
+            ">${w}</span>
+        `).join("")}</div>
         <button class="modal-btn" id="copy-btn">Copy phrase</button>
         <button class="modal-btn primary" id="confirm-btn">I've saved it, continue</button>
     `);
 
     document.getElementById("copy-btn").onclick = () => {
         navigator.clipboard.writeText(phrase).then(() => {
-            document.getElementById("copy-btn").textContent = "Copied ✔";
+            document.getElementById("copy-btn").textContent = "Copied!";
         });
 
         setTimeout(() => {
@@ -118,26 +126,24 @@ async function joinByCode(code) {
 }
 
 async function recoveryByPhrase(phrase) {
-    // TODO: embed stash id into recovery blob so prompt isnt needed
-    const stashId = prompt("Enter your stash ID:");
-    if (!stashId) return;
-
     try {
-        const recovery = await apiGetRecovery(stashId);
+        const stashKeyBytes = await phraseToBytes(phrase.trim());
+        const recoveryId = await deriveRecoveryId(stashKeyBytes);
+        const recovery = await apiGetRecoveryByRecoveryId(recoveryId);
+
         const salt = fromBase64(recovery.salt);
         const wrapKey = await deriveWrappingKey(phrase.trim(), salt);
         const stashKey = await unwrapStashKey(recovery.encryptedKey, recovery.iv, wrapKey);
-        const stashKeyBytes = await exportKeyBytes(stashKey);
+        const resolvedKeyBytes = await exportKeyBytes(stashKey);
 
-        localStorage.setItem(STORAGE_KEYS.stashId, stashId);
-        localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(stashKeyBytes));
+        localStorage.setItem(STORAGE_KEYS.stashId, recovery.stashId);
+        localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(resolvedKeyBytes));
 
-        await authenticate(stashId, stashKeyBytes);
+        await authenticate(recovery.stashId, resolvedKeyBytes);
         closeModal();
         enterStash();
-
-    } catch {
-        document.getElementById("modal-error").textContent = "Recovery failed - check your phrase.";
+    } catch (err) {
+        document.getElementById("modal-error").textContent = err.message || "Recovery failed - check your phrase.";
     }
 }
 
@@ -157,7 +163,7 @@ function showJoinModal() {
             <div style="flex:1;height:1px;background:rgba(139,126,200,0.15)"></div>or
             <div style="flex:1;height:1px;background:rgba(139,126,200,0.15)"></div>
         </div>
-        <button class="modal-btn" id="recover-btn">Recover with phrase</button>
+        <button class="modal-btn" id="recover-btn" style="margin-top:0.6rem;">Recover with phrase</button>
         <div id="modal-error" style="font-size:0.85rem;color:#e06c6c;margin-top:0.5rem;text-align:center"></div>
     `);
 
