@@ -246,3 +246,98 @@ body::before {
         opacity: 1;
     }
 }
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: rgba(9, 9, 13, 0.85);
+    backdrop-filter: blur(8px);
+    animation: fadeIn 0.2s ease forwards;
+}
+
+.modal {
+    background: rgba(20, 18, 30, 0.95);
+    border: 1px solid rgba(139, 126, 200, 0.25);
+    border-radius: 1.25rem;
+    padding: 2rem 2.25rem;
+    width: 100%;
+    max-width: 400px;
+    position: relative;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.modal-title {
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin-bottom: 0.35rem;
+}
+
+.modal-sub {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+}
+
+.modal-btn {
+    width: 100%;
+    padding: 0.8rem;
+    background: transparent;
+    border: 1px solid var(--action-border);
+    border-radius: 999px;
+    color: var(--text-primary);
+    font-family: "Instrument Sans", sans-serif;
+    font-size: 0.97rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 0.6rem;
+}
+
+.modal-btn:hover {
+    border-color: var(--accent);
+    background: var(--action-hover);
+}
+
+.modal-btn.primary {
+    background: rgba(139, 126, 200, 0.18);
+    border-color: rgba(139, 126, 200, 0.5);
+}
+
+.modal-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 0.25rem;
+    transition: color 0.2s;
+}
+
+.modal-close:hover {
+    color: var(--text-primary);
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(16px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

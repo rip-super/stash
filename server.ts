@@ -21,7 +21,7 @@ const app = new Hono();
 
 const challenges = new Map<string, { nonce: string, expiresAt: number }>();
 const sessions = new Map<string, { stashId: string, expiresAt: number }>();
-const accessCodes = new Map<string, { stashId: string, expiresAt: number }>();
+const accessCodes = new Map<string, { stashId: string, expiresAt: number, transfer: { iv: string, encryptedKey: string } }>();
 
 const QUOTA = 500 * 1024 * 1024;
 
@@ -40,7 +40,7 @@ app.post("/stash", async c => {
     const { id, authVerifier, recovery } = await c.req.json<{
         id: string,
         authVerifier: string,
-        recovery: { salt: string, kdfParams: object, encryptedKey: string };
+        recovery: { salt: string, kdfParams: object, iv: string, encryptedKey: string }
     }>();
 
     if (!id || !authVerifier || !recovery) return c.json({ error: "Missing required fields" }, 400);
@@ -108,10 +108,13 @@ app.post("/stash/:id/access-code", async c => {
     const id = c.req.param("id");
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
+    const { transfer } = await c.req.json<{ transfer: { iv: string, encryptedKey: string } }>();
+    if (!transfer?.iv || !transfer?.encryptedKey) return c.json({ error: "Missing transfer blob" }, 400);
+
     for (const [k, v] of accessCodes) if (v.stashId === id) accessCodes.delete(k);
 
     const code = randomBytes(3).toString("hex").toUpperCase();
-    accessCodes.set(code, { stashId: id, expiresAt: Date.now() + 10 * 60 * 1000 });
+    accessCodes.set(code, { stashId: id, expiresAt: Date.now() + 10 * 60 * 1000, transfer });
 
     return c.json({ code, expiresIn: 600 });
 });
@@ -125,9 +128,10 @@ app.post("/stash/join/:token", async c => {
         return c.json({ error: "Invalid or expired code" }, 404);
     }
 
+    const { stashId, transfer } = entry;
     accessCodes.delete(code);
-    const recovery = JSON.parse(await readFile(join("./stashes", entry.stashId, "recovery.json"), "utf-8"));
-    return c.json({ stashId: entry.stashId, recovery });
+
+    return c.json({ stashId, transfer });
 });
 
 app.get("/stash/:id/metadata", async c => {
