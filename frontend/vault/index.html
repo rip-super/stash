@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vault</title>
+    <link rel="stylesheet" href="/vault/style.css" />
+</head>
+
+<body>
+    <main class="vault-shell" id="vaultShell">
+        <header class="vault-topbar">
+            <div class="topbar-left">
+                <div class="brand-lockup" aria-label="Go to stash home">
+                    <span class="brand-wordmark">stash</span>
+                    <span class="brand-tagline">encrypted personal file storage</span>
+                </div>
+
+                <div class="topbar-divider" aria-hidden="true"></div>
+
+                <div class="vault-intro">
+                    <h1 class="vault-title">Vault</h1>
+                    <p class="vault-description">
+                        Browse encrypted files, manage folders, and securely access everything across your devices.
+                    </p>
+                </div>
+            </div>
+
+            <div class="topbar-actions">
+                <button type="button" class="action ghost" id="newFolderBtn">new folder</button>
+                <button type="button" class="action" id="uploadBtn">upload</button>
+            </div>
+        </header>
+
+        <section class="vault-frame">
+            <div class="vault-header">
+                <div class="viewer-toolbar">
+                    <div class="viewer-left">
+                        <div class="viewer-nav" aria-label="Folder navigation">
+                            <button type="button" class="icon-action" id="backBtn" aria-label="Go back">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M15 5 8 12l7 7" />
+                                </svg>
+                            </button>
+
+                            <button type="button" class="icon-action" id="forwardBtn" aria-label="Go forward">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="m9 5 7 7-7 7" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <label class="vault-search" for="vaultSearch">
+                            <span class="vault-search-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24">
+                                    <circle cx="11" cy="11" r="6.5"></circle>
+                                    <path d="M16 16l4 4"></path>
+                                </svg>
+                            </span>
+                            <input type="search" id="vaultSearch" class="vault-search-input" placeholder="Search files and folders" autocomplete="off"
+                                spellcheck="false" />
+                        </label>
+                    </div>
+                </div>
+
+                <nav class="breadcrumbs" id="breadcrumbs" aria-label="Breadcrumb"></nav>
+            </div>
+
+            <section class="dropzone" id="dropzone" aria-label="Vault contents">
+                <div class="drop-overlay" id="dropOverlay" aria-hidden="true">
+                    <div class="drop-overlay-inner">
+                        <div class="drop-glyph">+</div>
+                        <p class="drop-title">Drop files to upload</p>
+                        <p class="drop-copy">Securely upload and access all your files</p>
+                    </div>
+                </div>
+
+                <div class="empty-state hidden" id="emptyState">
+                    <div class="empty-icon">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14" />
+                        </svg>
+                    </div>
+                    <h2>Nothing here yet.</h2>
+                    <p>Drop some files here to be securely stored and accessed from all your devices.</p>
+                    <button type="button" class="action" id="emptyUploadBtn">upload to vault</button>
+                </div>
+
+                <div class="list-state" id="listState">
+                    <div class="list-head">
+                        <div>Name</div>
+                        <div>Size</div>
+                        <div>Modified</div>
+                    </div>
+
+                    <div class="list-body" id="listBody"></div>
+                </div>
+
+                <div class="drag-parent-dock hidden" id="dragParentDock">
+                    <button type="button" class="parent-dropzone" id="parentDropzone">
+                        <span class="parent-dropzone-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M12 19V5"></path>
+                                <path d="m6 11 6-6 6 6"></path>
+                            </svg>
+                        </span>
+                        <span class="parent-dropzone-copy">
+                            <strong>Move to parent folder</strong>
+                            <span>Drop here to move up one level</span>
+                        </span>
+                    </button>
+                </div>
+            </section>
+        </section>
+
+        <aside class="sidebar-panel">
+            <section class="device-panel" aria-labelledby="devicePanelTitle">
+                <div class="device-card">
+                    <div class="device-head">
+                        <div>
+                            <p class="device-label">access</p>
+                            <h2 class="device-title" id="devicePanelTitle">Connected Devices</h2>
+                        </div>
+                    </div>
+
+                    <p class="device-copy">See who is connected right now and which devices are currently offline.</p>
+
+                    <div class="device-list" id="deviceList"></div>
+                </div>
+            </section>
+
+            <section class="selection-drawer hidden" id="selectionPanel" aria-live="polite">
+                <div class="selection-card">
+                    <button type="button" class="selection-close" id="closeSelectionBtn" aria-label="Close selection panel">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 6l12 12M18 6 6 18" />
+                        </svg>
+                    </button>
+
+                    <p class="selection-label" id="selectionLabel">selected item</p>
+                    <h2 class="selection-name" id="selectionName">-</h2>
+                    <div class="selection-meta" id="selectionMeta"></div>
+
+                    <div class="selection-actions">
+                        <button type="button" class="modal-btn primary" id="downloadBtn">download</button>
+                        <button type="button" class="modal-btn" id="renameBtn">rename</button>
+                        <button type="button" class="modal-btn danger" id="deleteBtn">delete</button>
+                    </div>
+                </div>
+            </section>
+        </aside>
+
+        <footer class="vault-footer">
+            <span>No accounts</span>
+            <span class="bullet">&#9679;</span>
+            <span>No plaintext</span>
+            <span class="bullet">&#9679;</span>
+            <span>No exceptions</span>
+        </footer>
+
+        <input type="file" id="fileInput" multiple hidden />
+    </main>
+
+    <script src="/vault/script.js"></script>
+</body>
+
+</html>

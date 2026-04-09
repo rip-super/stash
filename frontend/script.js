@@ -218,7 +218,7 @@ async function tryAutoLogin() {
     } catch { }
 }
 
-const enterStash = () => window.location.href = "/#"; // TODO: Replace with /browser/index.html once i make that
+const enterStash = () => window.location.href = "/vault";
 
 createBtn.addEventListener("click", e => {
     e.preventDefault();
