@@ -1,4 +1,4 @@
-tryAutoLogin();
+document.addEventListener("DOMContentLoaded", tryAutoLogin);
 
 const [createBtn, joinBtn] = document.querySelectorAll(".action");
 

@@ -232,6 +232,7 @@ body::before {
     opacity: 0.9;
     user-select: none;
     font-size: 0.85em;
+    margin-bottom: 3px;
 }
 
 @keyframes fadeInUp {

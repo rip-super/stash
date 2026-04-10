@@ -67,6 +67,10 @@ const closeSelectionBtnEl = document.getElementById("closeSelectionBtn");
 const dragParentDockEl = document.getElementById("dragParentDock");
 const parentDropzoneEl = document.getElementById("parentDropzone");
 
+if (!localStorage.getItem(STORAGE_KEYS.stashKey)) {
+    window.location.replace("/");
+}
+
 function getCurrentFolder() {
     let node = vaultData;
 
