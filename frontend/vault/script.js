@@ -1,3 +1,5 @@
+// #region Constants
+
 const vaultData = { id: "root", name: "stash", type: "folder", children: [], modified: "" };
 
 const deviceData = [
@@ -22,6 +24,10 @@ const state = {
     newItemIds: new Set(),
 };
 
+// #endregion
+
+// #region DOM vars
+
 const breadcrumbsEl = document.getElementById("breadcrumbs");
 const listBodyEl = document.getElementById("listBody");
 const emptyStateEl = document.getElementById("emptyState");
@@ -42,14 +48,20 @@ const closeSelectionBtnEl = document.getElementById("closeSelectionBtn");
 const dragParentDockEl = document.getElementById("dragParentDock");
 const parentDropzoneEl = document.getElementById("parentDropzone");
 
-if (!localStorage.getItem(STORAGE_KEYS.stashKey)) {
-    window.location.replace("/");
+// #endregion
+
+// #region Helpers
+
+function getStashContext() {
+    return {
+        stashId: localStorage.getItem(STORAGE_KEYS.stashId),
+        stashKeyBytes: fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey)),
+        token: localStorage.getItem(STORAGE_KEYS.sessionToken),
+    };
 }
 
 async function saveMetadata() {
-    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
-    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
-    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
+    const { stashId, stashKeyBytes, token } = getStashContext();
     const buffer = await encryptMetadata(vaultData, stashKeyBytes);
     await apiPutMetadata(stashId, token, buffer);
 }
@@ -90,9 +102,7 @@ function fuzzyMatch(text, query) {
     if (!needle) return true;
     if (source.includes(needle)) return true;
 
-    let i = 0;
-    let j = 0;
-
+    let i = 0, j = 0;
     while (i < source.length && j < needle.length) {
         if (source[i] === needle[j]) j++;
         i++;
@@ -105,28 +115,26 @@ function getVisibleItems(items) {
     if (!state.searchQuery) return items;
 
     const results = [];
-    const currentFolder = getCurrentFolder();
 
     function walk(node, trail = []) {
         for (const child of node.children || []) {
             const nextTrail = [...trail, child.name];
 
             if (fuzzyMatch(child.name, state.searchQuery)) {
-                results.push({
-                    ...child,
-                    searchPath: nextTrail.slice(0, -1).join(" / ")
-                });
+                results.push({ ...child, searchPath: nextTrail.slice(0, -1).join(" / ") });
             }
 
-            if (child.type === "folder") {
-                walk(child, nextTrail);
-            }
+            if (child.type === "folder") walk(child, nextTrail);
         }
     }
 
-    walk(currentFolder);
+    walk(getCurrentFolder());
     return results;
 }
+
+// #endregion
+
+// #region Icons
 
 function itemIcon(type) {
     if (type === "folder") {
@@ -150,33 +158,27 @@ function itemIcon(type) {
 }
 
 function deviceIcon(type) {
-    if (type === "mobile") {
-        return `
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="8" y="2.75" width="8" height="18.5" rx="2.2"></rect>
-            <path d="M11 18.25h2"></path>
-          </svg>
-        `;
-    }
+    if (type === "mobile") return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="8" y="2.75" width="8" height="18.5" rx="2.2"></rect>
+          <path d="M11 18.25h2"></path>
+        </svg>
+    `;
 
-    if (type === "tablet") {
-        return `
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="6" y="3" width="12" height="18" rx="2"></rect>
-            <path d="M11 18.5h2"></path>
-          </svg>
-        `;
-    }
+    if (type === "tablet") return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="6" y="3" width="12" height="18" rx="2"></rect>
+          <path d="M11 18.5h2"></path>
+        </svg>
+    `;
 
-    if (type === "server") {
-        return `
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="4" width="16" height="6" rx="1.5"></rect>
-            <rect x="4" y="14" width="16" height="6" rx="1.5"></rect>
-            <path d="M8 7h.01M8 17h.01"></path>
-          </svg>
-        `;
-    }
+    if (type === "server") return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="4" y="4" width="16" height="6" rx="1.5"></rect>
+          <rect x="4" y="14" width="16" height="6" rx="1.5"></rect>
+          <path d="M8 7h.01M8 17h.01"></path>
+        </svg>
+    `;
 
     return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -186,20 +188,9 @@ function deviceIcon(type) {
       `;
 }
 
-function setDropActive(active) {
-    if (state.draggedItemId) return;
-    state.dragActive = active;
-    dropzoneEl.classList.toggle("drag-active", active);
-    dropOverlayEl.setAttribute("aria-hidden", active ? "false" : "true");
-}
+// #endregion
 
-function setDragMoveMode(active) {
-    dragParentDockEl.classList.toggle("hidden", !active || state.path.length === 0);
-}
-
-function clearSelection() {
-    state.selectedItemId = null;
-}
+// #region Navigation
 
 function pushHistory(nextPath) {
     const normalized = [...nextPath];
@@ -249,6 +240,12 @@ async function navigateToCrumb(index) {
     await render();
 }
 
+// #endregion
+
+// #region Rendering
+
+function clearSelection() { state.selectedItemId = null; }
+
 function renderBreadcrumbs() {
     const trail = [{ id: "root", name: "Home", root: true }];
     let node = vaultData;
@@ -279,9 +276,7 @@ function renderBreadcrumbs() {
     }).join("");
 
     breadcrumbsEl.querySelectorAll(".crumb").forEach(button => {
-        button.addEventListener("click", () => {
-            navigateToCrumb(Number(button.dataset.crumbIndex));
-        });
+        button.addEventListener("click", () => navigateToCrumb(Number(button.dataset.crumbIndex)));
     });
 }
 
@@ -318,6 +313,7 @@ async function renderList() {
             `;
             document.getElementById("emptyUploadBtn")?.addEventListener("click", () => fileInputEl.click());
         }
+
         state.navDirection = null;
         return;
     }
@@ -370,9 +366,7 @@ async function renderList() {
     if (state.navDirection) {
         listBodyEl.classList.remove("enter-forward", "enter-back");
         void listBodyEl.offsetWidth;
-
         listBodyEl.classList.add(state.navDirection === "forward" ? "enter-forward" : "enter-back");
-
         listBodyEl.addEventListener("animationend", () => {
             listBodyEl.classList.remove("enter-forward", "enter-back");
         }, { once: true });
@@ -386,6 +380,7 @@ async function renderList() {
         if (input) {
             requestAnimationFrame(() => { input.focus(); input.select(); });
             let committed = false;
+
             const commit = async () => {
                 if (committed) return;
                 committed = true;
@@ -412,7 +407,6 @@ async function renderList() {
                 if (e.key === "Enter") { e.preventDefault(); commit(); }
                 if (e.key === "Escape") { e.preventDefault(); cancel(); }
             });
-
             input.addEventListener("blur", commit);
             input.addEventListener("click", e => e.stopPropagation());
             input.addEventListener("dblclick", e => e.stopPropagation());
@@ -425,11 +419,7 @@ async function renderList() {
         row.addEventListener("click", () => {
             if (state.renamingItemId === id) return;
             state.selectedItemId = id;
-
-            listBodyEl.querySelectorAll(".list-row").forEach(listRow => {
-                listRow.classList.toggle("selected", listRow.dataset.id === id);
-            });
-
+            listBodyEl.querySelectorAll(".list-row").forEach(r => r.classList.toggle("selected", r.dataset.id === id));
             renderSelection();
         });
 
@@ -500,7 +490,6 @@ function renderSelection() {
 
         selectionPanelEl.classList.remove("open");
         selectionPanelEl.classList.add("closing");
-
         selectionPanelEl.addEventListener("animationend", () => {
             selectionPanelEl.classList.add("hidden");
             selectionPanelEl.classList.remove("closing");
@@ -512,16 +501,8 @@ function renderSelection() {
     selectionLabelEl.textContent = item.type === "folder" ? "selected folder" : "selected file";
     selectionNameEl.textContent = item.name;
     selectionMetaEl.innerHTML = item.type === "folder"
-        ? `
-            <span>folder</span>
-            <span class="bullet">&#9679;</span>
-            <span>${item.modified}</span>
-        `
-        : `
-            <span>${item.size}</span>
-            <span class="bullet">&#9679;</span>
-            <span>${item.modified}</span>
-        `;
+        ? `<span>folder</span><span class="bullet">&#9679;</span><span>${item.modified}</span>`
+        : `<span>${item.size}</span><span class="bullet">&#9679;</span><span>${item.modified}</span>`;
 
     selectionPanelEl.classList.remove("hidden", "closing");
     selectionPanelEl.classList.add("open");
@@ -530,17 +511,13 @@ function renderSelection() {
 function renderDevices() {
     deviceListEl.innerHTML = deviceData.map(device => `
         <div class="device-row" data-id="${device.id}">
-            <div class="device-icon" aria-hidden="true">
-                ${deviceIcon(device.type)}
-            </div>
+            <div class="device-icon" aria-hidden="true">${deviceIcon(device.type)}</div>
             <div class="device-info">
                 <div class="device-name-row">
                     <h3 class="device-name">${device.name}</h3>
                     <button type="button" class="remove-device-btn" data-id="${device.id}" aria-label="Remove ${device.name}">&#10005;</button>
                 </div>
-                <div class="device-meta">
-                    <span>${device.lastSeen}</span>
-                </div>
+                <div class="device-meta"><span>${device.lastSeen}</span></div>
             </div>
         </div>
     `).join("");
@@ -548,18 +525,12 @@ function renderDevices() {
     deviceListEl.querySelectorAll(".remove-device-btn").forEach(btn => {
         btn.addEventListener("click", () => {
             const row = btn.closest(".device-row");
-            const id = btn.dataset.id;
 
             row.classList.add("exiting");
-
             row.addEventListener("transitionend", event => {
                 if (event.target !== row) return;
-
-                const idx = deviceData.findIndex(d => d.id === id);
-                if (idx !== -1) {
-                    deviceData.splice(idx, 1);
-                }
-
+                const idx = deviceData.findIndex(d => d.id === btn.dataset.id);
+                if (idx !== -1) deviceData.splice(idx, 1);
                 row.remove();
 
                 if (deviceSummaryEl) {
@@ -582,19 +553,20 @@ async function render() {
     renderSelection();
 }
 
+// #endregion
+
+// #region File I/O
+
 async function upload(files) {
-    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
-    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
-    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
+    const { stashId, stashKeyBytes, token } = getStashContext();
     const currentFolder = getCurrentFolder();
     const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
     for (const file of Array.from(files)) {
-        const fileBytes = await file.arrayBuffer();
-        const encrypted = await encryptBlob(fileBytes, stashKeyBytes);
+        const encrypted = await encryptBlob(await file.arrayBuffer(), stashKeyBytes);
         const { blobId } = await apiUploadBlob(stashId, token, encrypted);
-
         const kb = Math.max(1, Math.round(file.size / 1024));
+
         const newItem = {
             id: "file-" + Date.now(),
             name: file.name,
@@ -608,9 +580,7 @@ async function upload(files) {
         state.newItemIds.add(newItem.id);
     }
 
-    const buffer = await encryptMetadata(vaultData, stashKeyBytes);
-    await apiPutMetadata(stashId, token, buffer);
-
+    await saveMetadata();
     clearSelection();
     setDropActive(false);
     await render();
@@ -621,17 +591,12 @@ async function addFolder() {
     const count = currentFolder.children.filter(
         item => item.type === "folder" && item.name.startsWith("new folder")
     ).length + 1;
-    const now = new Date().toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-    });
 
     const newFolder = {
         id: "folder-" + Date.now(),
         name: count === 1 ? "new folder" : `new folder ${count}`,
         type: "folder",
-        modified: now,
+        modified: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
         children: []
     };
 
@@ -646,9 +611,7 @@ async function deleteSelected() {
     const selected = getSelectedItem();
     if (!selected || selected.id === "root") return;
 
-    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
-    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
-    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
+    const { stashId, token } = getStashContext();
 
     function collectBlobIds(node) {
         const ids = [];
@@ -657,36 +620,29 @@ async function deleteSelected() {
         return ids;
     }
 
-    const blobIds = collectBlobIds(selected);
-    await Promise.all(blobIds.map(blobId =>
-        fetch(`/stash/${stashId}/blob/${blobId}`, {
-            method: "DELETE",
-            headers: { "Authorization": `Bearer ${token}` }
-        })
-    ));
+    await Promise.all(
+        collectBlobIds(selected).map(blobId =>
+            apiFetch(`/stash/${stashId}/blob/${blobId}`, { method: "DELETE", token })
+        )
+    );
 
     const rowEl = listBodyEl.querySelector(`[data-id="${selected.id}"]`);
-    if (rowEl) {
-        rowEl.classList.add("exiting");
-        rowEl.addEventListener("animationend", async () => {
-            const found = findNodeAndParentById(selected.id);
-            if (found?.parent?.children) {
-                found.parent.children = found.parent.children.filter(i => i.id !== selected.id);
-            }
-            clearSelection();
-            const buffer = await encryptMetadata(vaultData, stashKeyBytes);
-            await apiPutMetadata(stashId, token, buffer);
-            await render();
-        }, { once: true });
-    } else {
+
+    const finalize = async () => {
         const found = findNodeAndParentById(selected.id);
         if (found?.parent?.children) {
             found.parent.children = found.parent.children.filter(i => i.id !== selected.id);
         }
         clearSelection();
-        const buffer = await encryptMetadata(vaultData, stashKeyBytes);
-        await apiPutMetadata(stashId, token, buffer);
+        await saveMetadata();
         await render();
+    };
+
+    if (rowEl) {
+        rowEl.classList.add("exiting");
+        rowEl.addEventListener("animationend", finalize, { once: true });
+    } else {
+        await finalize();
     }
 }
 
@@ -702,9 +658,7 @@ async function downloadSelected() {
     const selected = getSelectedItem();
     if (!selected) return;
 
-    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
-    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
-    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
+    const { stashId, stashKeyBytes, token } = getStashContext();
 
     if (selected.type === "file") {
         const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
@@ -731,11 +685,9 @@ async function downloadSelected() {
         for (const child of node.children || []) {
             if (child.type === "file") {
                 const buffer = await apiDownloadBlob(stashId, token, child.blobId);
-                const decrypted = await decryptBlob(buffer, stashKeyBytes);
-                folder.file(child.name, decrypted);
+                folder.file(child.name, await decryptBlob(buffer, stashKeyBytes));
             } else if (child.type === "folder") {
-                const subfolder = folder.folder(child.name);
-                await addToZip(child, subfolder);
+                await addToZip(child, folder.folder(child.name));
             }
         }
     }
@@ -749,10 +701,26 @@ async function downloadSelected() {
     a.href = url;
     a.download = `${selected.name}.zip`;
     a.click();
+
     URL.revokeObjectURL(url);
 
     toast.classList.add("hiding");
     toast.addEventListener("animationend", () => toast.remove(), { once: true });
+}
+
+// #endregion
+
+// #region Drag and Drop
+
+function setDropActive(active) {
+    if (state.draggedItemId) return;
+    state.dragActive = active;
+    dropzoneEl.classList.toggle("drag-active", active);
+    dropOverlayEl.setAttribute("aria-hidden", active ? "false" : "true");
+}
+
+function setDragMoveMode(active) {
+    dragParentDockEl.classList.toggle("hidden", !active || state.path.length === 0);
 }
 
 function isDescendantFolder(sourceId, targetFolderId) {
@@ -760,9 +728,7 @@ function isDescendantFolder(sourceId, targetFolderId) {
     if (!sourceFound || sourceFound.node.type !== "folder") return false;
 
     function walk(node) {
-        if (!node.children) return false;
-
-        for (const child of node.children) {
+        for (const child of node.children || []) {
             if (child.id === targetFolderId) return true;
             if (child.type === "folder" && walk(child)) return true;
         }
@@ -796,12 +762,10 @@ async function moveItemToFolder(sourceId, targetFolderId) {
 
     const sf = findNodeAndParentById(sourceId);
     const tf = findNodeAndParentById(targetFolderId);
-
     if (!sf?.parent?.children || !tf?.node?.children) return;
 
-    const item = sf.node;
     sf.parent.children = sf.parent.children.filter(i => i.id !== sourceId);
-    tf.node.children.unshift(item);
+    tf.node.children.unshift(sf.node);
 
     state.draggedItemId = null;
     state.folderDropTargetId = null;
@@ -832,9 +796,8 @@ async function moveItemToParentFolder(sourceId) {
     if (targetParent.id === sourceId) return;
     if (isDescendantFolder(sourceId, targetParent.id)) return;
 
-    const movingItem = sourceFound.node;
     sourceFound.parent.children = sourceFound.parent.children.filter(item => item.id !== sourceId);
-    targetParent.children.unshift(movingItem);
+    targetParent.children.unshift(sourceFound.node);
 
     state.draggedItemId = null;
     state.folderDropTargetId = null;
@@ -846,8 +809,11 @@ async function moveItemToParentFolder(sourceId) {
     await render();
 }
 
+// #endregion
+
+// #region Event Listeners
+
 document.getElementById("uploadBtn").addEventListener("click", () => fileInputEl.click());
-document.getElementById("emptyUploadBtn")?.addEventListener("click", () => fileInputEl.click());
 document.getElementById("newFolderBtn").addEventListener("click", addFolder);
 document.getElementById("deleteBtn").addEventListener("click", deleteSelected);
 document.getElementById("renameBtn").addEventListener("click", startInlineRename);
@@ -855,11 +821,7 @@ document.getElementById("downloadBtn").addEventListener("click", downloadSelecte
 
 closeSelectionBtnEl.addEventListener("click", () => {
     clearSelection();
-
-    listBodyEl.querySelectorAll(".list-row").forEach(row => {
-        row.classList.remove("selected");
-    });
-
+    listBodyEl.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
     renderSelection();
 });
 
@@ -867,37 +829,26 @@ backBtnEl.addEventListener("click", goBack);
 forwardBtnEl.addEventListener("click", goForward);
 
 fileInputEl.addEventListener("change", event => {
-    if (event.target.files?.length) {
-        upload(event.target.files);
-    }
+    if (event.target.files?.length) upload(event.target.files);
     fileInputEl.value = "";
 });
 
 document.addEventListener("dragover", event => {
-    if (state.draggedItemId) {
-        event.preventDefault();
-        return;
-    }
-
     event.preventDefault();
-    setDropActive(true);
+    if (!state.draggedItemId) setDropActive(true);
 });
 
 document.addEventListener("dragenter", event => {
-    if (state.draggedItemId) return;
     event.preventDefault();
-    setDropActive(true);
+    if (!state.draggedItemId) setDropActive(true);
 });
 
 document.addEventListener("dragleave", event => {
     if (state.draggedItemId) return;
-
     if (
         !event.relatedTarget ||
-        event.clientX <= 0 ||
-        event.clientY <= 0 ||
-        event.clientX >= window.innerWidth ||
-        event.clientY >= window.innerHeight
+        event.clientX <= 0 || event.clientY <= 0 ||
+        event.clientX >= window.innerWidth || event.clientY >= window.innerHeight
     ) {
         setDropActive(false);
     }
@@ -910,9 +861,7 @@ document.addEventListener("drop", event => {
     setDropActive(false);
 
     const files = event.dataTransfer?.files;
-    if (files?.length) {
-        upload(files);
-    }
+    if (files?.length) upload(files);
 });
 
 parentDropzoneEl.addEventListener("dragover", event => {
@@ -946,9 +895,7 @@ window.addEventListener("blur", async () => {
 });
 
 document.addEventListener("mouseleave", () => {
-    if (!state.draggedItemId) {
-        setDropActive(false);
-    }
+    if (!state.draggedItemId) setDropActive(false);
 });
 
 vaultSearchEl.addEventListener("input", async event => {
@@ -968,6 +915,10 @@ document.addEventListener("keydown", async event => {
     }
 });
 
+// #endregion
+
+// #region Init
+
 (async () => {
     const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
     const stashKey = localStorage.getItem(STORAGE_KEYS.stashKey);
@@ -979,11 +930,8 @@ document.addEventListener("keydown", async event => {
     try {
         const token = await authenticate(stashId, stashKeyBytes);
         const buffer = await apiGetMetadata(stashId, token);
-        if (buffer) {
-            const loaded = await decryptMetadata(buffer, stashKeyBytes);
-            Object.assign(vaultData, loaded);
-        }
-    } catch (err) {
+        if (buffer) Object.assign(vaultData, await decryptMetadata(buffer, stashKeyBytes));
+    } catch {
         localStorage.removeItem(STORAGE_KEYS.stashId);
         localStorage.removeItem(STORAGE_KEYS.stashKey);
         localStorage.removeItem(STORAGE_KEYS.sessionToken);
@@ -994,3 +942,5 @@ document.addEventListener("keydown", async event => {
     renderDevices();
     await render();
 })();
+
+// #endregion

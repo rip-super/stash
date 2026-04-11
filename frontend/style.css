@@ -56,16 +56,6 @@ body::before {
     z-index: 0;
 }
 
-@keyframes grainShift {
-    0% {
-        background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
-    }
-
-    100% {
-        background-position: 220px 220px, 220px 220px, 220px 220px, 220px 220px, 220px 220px;
-    }
-}
-
 .container {
     height: 100vh;
     display: flex;
@@ -90,11 +80,11 @@ body::before {
     -webkit-text-fill-color: transparent;
     background-clip: text;
     text-shadow: 0 8px 40px var(--accent-glow);
+    cursor: default;
     animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     opacity: 0;
     transform: translateY(16px);
     transition: text-shadow 0.3s ease;
-    cursor: default;
 }
 
 .wordmark:hover {
@@ -111,6 +101,24 @@ body::before {
     animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.12s forwards;
     opacity: 0;
     transform: translateY(10px);
+}
+
+.tagline {
+    font-size: clamp(0.82rem, 2.1vw, 0.92rem);
+    color: var(--text-muted);
+    margin: 0;
+    letter-spacing: 0.025em;
+    line-height: 1.5;
+    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.36s forwards;
+    opacity: 0;
+    transform: translateY(10px);
+}
+
+.tagline .bullet {
+    margin: 0 0.45rem;
+    color: var(--bullet);
+    user-select: none;
+    display: inline-block;
 }
 
 .actions {
@@ -175,24 +183,6 @@ body::before {
     outline-offset: 3px;
 }
 
-.tagline {
-    font-size: clamp(0.82rem, 2.1vw, 0.92rem);
-    color: var(--text-muted);
-    margin: 0;
-    letter-spacing: 0.025em;
-    line-height: 1.5;
-    animation: fadeInUp 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.36s forwards;
-    opacity: 0;
-    transform: translateY(10px);
-}
-
-.tagline .bullet {
-    margin: 0 0.45rem;
-    color: var(--bullet);
-    user-select: none;
-    display: inline-block;
-}
-
 .footer {
     position: absolute;
     bottom: 1.6rem;
@@ -235,19 +225,6 @@ body::before {
     margin-bottom: 3px;
 }
 
-@keyframes fadeInUp {
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes fadeIn {
-    to {
-        opacity: 1;
-    }
-}
-
 .modal-overlay {
     position: fixed;
     inset: 0;
@@ -259,6 +236,10 @@ body::before {
     background: rgba(9, 9, 13, 0.85);
     backdrop-filter: blur(8px);
     animation: fadeIn 0.2s ease forwards;
+}
+
+.modal-overlay.closing {
+    animation: modalOut 0.15s ease-in forwards;
 }
 
 .modal {
@@ -331,8 +312,27 @@ body::before {
     color: var(--text-primary);
 }
 
-.modal-overlay.closing {
-    animation: modalOut 0.15s ease-in forwards;
+@keyframes grainShift {
+    0% {
+        background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
+    }
+
+    100% {
+        background-position: 220px 220px, 220px 220px, 220px 220px, 220px 220px, 220px 220px;
+    }
+}
+
+@keyframes fadeInUp {
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
 }
 
 @keyframes slideUp {

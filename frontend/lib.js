@@ -1,3 +1,5 @@
+// #region Utils
+
 const STORAGE_KEYS = {
     stashId: "stash.id",
     stashKey: "stash.key",
@@ -8,8 +10,15 @@ const toBase64 = bytes => btoa(String.fromCharCode(...bytes));
 const fromBase64 = b64 => new Uint8Array(atob(b64).split("").map(c => c.charCodeAt(0)));
 const toHex = bytes => Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
 
-const generateStashKey = async () => crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-const exportKeyBytes = async key => new Uint8Array(await crypto.subtle.exportKey("raw", key));
+// #endregion
+
+// #region Key Derivation
+
+const generateStashKey = () =>
+    crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+
+const exportKeyBytes = async key =>
+    new Uint8Array(await crypto.subtle.exportKey("raw", key));
 
 async function deriveSubKey(stashKeyBytes, info, usage) {
     const base = await crypto.subtle.importKey("raw", stashKeyBytes, { name: "HKDF" }, false, ["deriveKey"]);
@@ -33,6 +42,19 @@ async function deriveWrappingKey(password, salt) {
     );
 }
 
+async function deriveRecoveryId(stashKeyBytes) {
+    const base = await crypto.subtle.importKey("raw", stashKeyBytes, { name: "HKDF" }, false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits(
+        { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: new TextEncoder().encode("stash:recovery-id") },
+        base, 128
+    );
+    return toHex(new Uint8Array(bits));
+}
+
+// #endregion
+
+// #region Key Wrapping
+
 async function wrapStashKey(stashKey, wrappingKey) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const wrapped = await crypto.subtle.wrapKey("raw", stashKey, wrappingKey, { name: "AES-GCM", iv });
@@ -49,6 +71,10 @@ async function unwrapStashKey(encryptedKey, iv, wrappingKey) {
     );
 }
 
+// #endregion
+
+// #region Recovery
+
 let bip39 = null;
 async function getBip39() {
     if (!bip39) {
@@ -56,10 +82,8 @@ async function getBip39() {
             import("https://esm.sh/@scure/bip39@1.3.0"),
             import("https://esm.sh/@scure/bip39@1.3.0/wordlists/english"),
         ]);
-
         bip39 = { entropyToMnemonic, mnemonicToEntropy, wordlist };
     }
-
     return bip39;
 }
 
@@ -67,42 +91,20 @@ const keyToPhrase = async bytes => {
     const { entropyToMnemonic, wordlist } = await getBip39();
     return entropyToMnemonic(bytes.slice(0, 16), wordlist);
 };
+
 const phraseToBytes = async phrase => {
     const { mnemonicToEntropy, wordlist } = await getBip39();
     return new Uint8Array(mnemonicToEntropy(phrase.trim(), wordlist));
 };
 
+// #endregion
+
+// #region Auth
+
 const getAuthVerifier = async stashKeyBytes => {
     const authKey = await deriveSubKey(stashKeyBytes, "stash:auth", ["encrypt", "decrypt"]);
     return toBase64(await exportKeyBytes(authKey));
 };
-
-async function apiCreateStash({ id, authVerifier, recoveryId, recovery }) {
-    const res = await fetch("/stash", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, authVerifier, recoveryId, recovery }),
-    });
-
-    if (!res.ok) throw new Error((await res.json()).error);
-}
-
-async function apiGetChallenge(stashId) {
-    const res = await fetch(`/stash/${stashId}/challenge`);
-    if (!res.ok) throw new Error("Challenge failed");
-    return res.json();
-}
-
-async function apiAuth(stashId, response) {
-    const res = await fetch(`/stash/${stashId}/auth`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response }),
-    });
-
-    if (!res.ok) throw new Error("Auth Failed");
-    return res.json();
-}
 
 async function authenticate(stashId, stashKeyBytes) {
     const { nonce } = await apiGetChallenge(stashId);
@@ -118,115 +120,130 @@ async function authenticate(stashId, stashKeyBytes) {
     return token;
 }
 
-async function apiJoinByCode(code) {
-    const res = await fetch(`/stash/join/${code}`, { method: "POST" });
-    if (!res.ok) throw new Error("Invalid or expired code");
-    return res.json();
+// #endregion
+
+// #region Crypto
+
+async function encryptWithKey(key, plaintext) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+    const result = new Uint8Array(12 + ciphertext.byteLength);
+    result.set(iv, 0);
+    result.set(new Uint8Array(ciphertext), 12);
+    return result.buffer;
 }
 
-async function apiGetRecovery(stashId) {
-    const res = await fetch(`/stash/${stashId}/recovery`);
-    if (!res.ok) throw new Error("Stash not found");
-    return res.json();
-}
-
-async function deriveRecoveryId(stashKeyBytes) {
-    const base = await crypto.subtle.importKey("raw", stashKeyBytes, { name: "HKDF" }, false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits(
-        { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: new TextEncoder().encode("stash:recovery-id") },
-        base, 128
-    );
-    return toHex(new Uint8Array(bits));
-}
-
-async function apiGetRecoveryByRecoveryId(recoveryId) {
-    const res = await fetch(`/recovery/${recoveryId}`);
-    if (!res.ok) throw new Error("Stash not found - check your phrase.");
-    return res.json();
+async function decryptWithKey(key, buffer) {
+    const iv = new Uint8Array(buffer, 0, 12);
+    const ciphertext = new Uint8Array(buffer, 12);
+    return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
 }
 
 async function encryptMetadata(metadata, stashKeyBytes) {
     const key = await deriveSubKey(stashKeyBytes, "stash:metadata", ["encrypt", "decrypt"]);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
     const encoded = new TextEncoder().encode(JSON.stringify(metadata));
-    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
-    const result = new Uint8Array(12 + ciphertext.byteLength);
-
-    result.set(iv, 0);
-    result.set(new Uint8Array(ciphertext), 12);
-
-    return result.buffer;
+    return encryptWithKey(key, encoded);
 }
 
 async function decryptMetadata(buffer, stashKeyBytes) {
     const key = await deriveSubKey(stashKeyBytes, "stash:metadata", ["encrypt", "decrypt"]);
-    const iv = new Uint8Array(buffer, 0, 12);
-    const ciphertext = new Uint8Array(buffer, 12);
-    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
-
+    const plaintext = await decryptWithKey(key, buffer);
     return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+async function encryptBlob(fileBytes, stashKeyBytes) {
+    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
+    return encryptWithKey(key, fileBytes);
+}
+
+async function decryptBlob(buffer, stashKeyBytes) {
+    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
+    return decryptWithKey(key, buffer);
+}
+
+// #endregion
+
+// #region API
+
+async function apiFetch(url, { token, ...opts } = {}) {
+    const headers = { ...opts.headers };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(url, { ...opts, headers });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed: ${res.status}`);
+    }
+    return res;
+}
+
+async function apiCreateStash({ id, authVerifier, recoveryId, recovery }) {
+    await apiFetch("/stash", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, authVerifier, recoveryId, recovery }),
+    });
+}
+
+async function apiGetChallenge(stashId) {
+    const res = await apiFetch(`/stash/${stashId}/challenge`);
+    return res.json();
+}
+
+async function apiAuth(stashId, response) {
+    const res = await apiFetch(`/stash/${stashId}/auth`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ response }),
+    });
+    return res.json();
 }
 
 async function apiGetMetadata(stashId, token) {
     const res = await fetch(`/stash/${stashId}/metadata`, {
         headers: { "Authorization": `Bearer ${token}` }
     });
-
     if (res.status === 404) return null;
     if (!res.ok) throw new Error("Failed to fetch metadata");
-
     return res.arrayBuffer();
 }
 
 async function apiPutMetadata(stashId, token, buffer) {
-    const res = await fetch(`/stash/${stashId}/metadata`, {
+    await apiFetch(`/stash/${stashId}/metadata`, {
         method: "PUT",
-        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/octet-stream" },
-        body: buffer
+        token,
+        headers: { "Content-Type": "application/octet-stream" },
+        body: buffer,
     });
-
-    if (!res.ok) throw new Error("Failed to save metadata");
-}
-
-async function encryptBlob(fileBytes, stashKeyBytes) {
-    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, fileBytes);
-    const result = new Uint8Array(12 + ciphertext.byteLength);
-
-    result.set(iv, 0);
-    result.set(new Uint8Array(ciphertext), 12);
-
-    return result.buffer;
 }
 
 async function apiUploadBlob(stashId, token, buffer) {
-    const res = await fetch(`/stash/${stashId}/blob`, {
+    const res = await apiFetch(`/stash/${stashId}/blob`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/octet-stream" },
-        body: buffer
+        token,
+        headers: { "Content-Type": "application/octet-stream" },
+        body: buffer,
     });
-
-    if (!res.ok) throw new Error("Upload failed");
-
     return res.json();
 }
 
-async function decryptBlob(buffer, stashKeyBytes) {
-    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
-    const iv = new Uint8Array(buffer, 0, 12);
-    const ciphertext = new Uint8Array(buffer, 12);
-    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
-
-    return plaintext;
-}
-
 async function apiDownloadBlob(stashId, token, blobId) {
-    const res = await fetch(`/stash/${stashId}/blob/${blobId}`, {
-        headers: { "Authorization": `Bearer ${token}` }
-    });
-
-    if (!res.ok) throw new Error("Download failed");
-
+    const res = await apiFetch(`/stash/${stashId}/blob/${blobId}`, { token });
     return res.arrayBuffer();
 }
+
+async function apiJoinByCode(code) {
+    const res = await apiFetch(`/stash/join/${code}`, { method: "POST" });
+    return res.json();
+}
+
+async function apiGetRecovery(stashId) {
+    const res = await apiFetch(`/stash/${stashId}/recovery`);
+    return res.json();
+}
+
+async function apiGetRecoveryByRecoveryId(recoveryId) {
+    const res = await apiFetch(`/recovery/${recoveryId}`);
+    return res.json();
+}
+
+// #endregion
