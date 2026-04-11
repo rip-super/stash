@@ -183,7 +183,7 @@ app.post("/stash/:id/blob", async c => {
     const blobId = randomBytes(16).toString("hex");
     await writeFile(join("./stashes", id, "blobs", blobId), Buffer.from(data));
     reg.stashes[id].quotaUsed += data.byteLength;
-    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 2));
+    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
     return c.json({ blobId }, 201);
 });
@@ -213,7 +213,7 @@ app.delete("/stash/:id/blob/:blobId", async c => {
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     reg.stashes[id].quotaUsed -= size;
-    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 2));
+    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
 });

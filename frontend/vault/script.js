@@ -1,29 +1,4 @@
-const vaultData = {
-    id: "root", name: "stash", type: "folder", modified: "Apr 6, 2026",
-    children: [
-        {
-            id: "f-docs", name: "documents", type: "folder", modified: "Apr 4, 2026",
-            children: [
-                { id: "fi-1", name: "passport-scan.pdf", type: "file", size: "2.1 MB", modified: "Apr 4, 2026" },
-                { id: "fi-2", name: "tax-notes.txt", type: "file", size: "12 KB", modified: "Mar 28, 2026" }
-            ]
-        },
-        {
-            id: "f-photos", name: "photos", type: "folder", modified: "Apr 2, 2026",
-            children: [
-                {
-                    id: "f-trip", name: "trip", type: "folder", modified: "Apr 1, 2026",
-                    children: [
-                        { id: "fi-3", name: "lake-day.jpg", type: "file", size: "4.8 MB", modified: "Apr 1, 2026" },
-                        { id: "fi-4", name: "cabin.png", type: "file", size: "3.2 MB", modified: "Mar 30, 2026" }
-                    ]
-                }
-            ]
-        },
-        { id: "fi-5", name: "recovery-key.txt", type: "file", size: "1 KB", modified: "Apr 6, 2026" },
-        { id: "fi-6", name: "private-notes.md", type: "file", size: "18 KB", modified: "Apr 3, 2026" }
-    ]
-};
+const vaultData = { id: "root", name: "stash", type: "folder", children: [], modified: "" };
 
 const deviceData = [
     { id: "dev-1", name: "MacBook Pro", type: "desktop", lastSeen: "Last seen just now" },
@@ -69,6 +44,14 @@ const parentDropzoneEl = document.getElementById("parentDropzone");
 
 if (!localStorage.getItem(STORAGE_KEYS.stashKey)) {
     window.location.replace("/");
+}
+
+async function saveMetadata() {
+    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
+    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
+    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
+    const buffer = await encryptMetadata(vaultData, stashKeyBytes);
+    await apiPutMetadata(stashId, token, buffer);
 }
 
 function getCurrentFolder() {
@@ -233,37 +216,37 @@ function pushHistory(nextPath) {
     state.path = normalized;
 }
 
-function goBack() {
+async function goBack() {
     if (state.historyIndex === 0) return;
     state.historyIndex--;
     state.path = [...state.history[state.historyIndex]];
     state.navDirection = "back";
     clearSelection();
-    render();
+    await render();
 }
 
-function goForward() {
+async function goForward() {
     if (state.historyIndex >= state.history.length - 1) return;
     state.historyIndex++;
     state.path = [...state.history[state.historyIndex]];
     state.navDirection = "forward";
     clearSelection();
-    render();
+    await render();
 }
 
-function openFolder(folderId) {
+async function openFolder(folderId) {
     pushHistory([...state.path, folderId]);
     state.navDirection = "forward";
     clearSelection();
-    render();
+    await render();
 }
 
-function navigateToCrumb(index) {
+async function navigateToCrumb(index) {
     const targetPath = index === 0 ? [] : state.path.slice(0, index);
     state.navDirection = targetPath.length < state.path.length ? "back" : "forward";
     pushHistory(targetPath);
     clearSelection();
-    render();
+    await render();
 }
 
 function renderBreadcrumbs() {
@@ -302,7 +285,7 @@ function renderBreadcrumbs() {
     });
 }
 
-function renderList() {
+async function renderList() {
     const currentFolder = getCurrentFolder();
     const visibleItems = getVisibleItems(currentFolder.children || []);
 
@@ -319,10 +302,10 @@ function renderList() {
                 <p>Try a different search term or clear the search to see everything in this folder.</p>
                 <button type="button" class="action" id="clearSearchBtn">clear search</button>
             `;
-            document.getElementById("clearSearchBtn")?.addEventListener("click", () => {
+            document.getElementById("clearSearchBtn")?.addEventListener("click", async () => {
                 state.searchQuery = "";
                 vaultSearchEl.value = "";
-                renderList();
+                await renderList();
             });
         } else {
             emptyStateEl.innerHTML = `
@@ -330,7 +313,7 @@ function renderList() {
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14" /></svg>
                 </div>
                 <h2>Nothing here yet.</h2>
-                <p>Drop some files here to be securely stored and accessed from all your devices.</p>
+                <p>Drop some files here to get started with stash!</p>
                 <button type="button" class="action" id="emptyUploadBtn">upload to vault</button>
             `;
             document.getElementById("emptyUploadBtn")?.addEventListener("click", () => fileInputEl.click());
@@ -403,23 +386,26 @@ function renderList() {
         if (input) {
             requestAnimationFrame(() => { input.focus(); input.select(); });
             let committed = false;
-            const commit = () => {
+            const commit = async () => {
                 if (committed) return;
                 committed = true;
                 const found = findNodeAndParentById(state.renamingItemId);
                 if (found?.node) {
                     const name = input.value.trim();
-                    if (name) found.node.name = name;
+                    if (name) {
+                        found.node.name = name;
+                        await saveMetadata();
+                    }
                 }
                 state.renamingItemId = null;
-                render();
+                await render();
             };
 
-            const cancel = () => {
+            const cancel = async () => {
                 if (committed) return;
                 committed = true;
                 state.renamingItemId = null;
-                render();
+                await render();
             };
 
             input.addEventListener("keydown", e => {
@@ -468,16 +454,16 @@ function renderList() {
             requestAnimationFrame(() => ghost.remove());
 
             setDragMoveMode(true);
-            requestAnimationFrame(() => renderList());
+            requestAnimationFrame(async () => await renderList());
         });
 
-        row.addEventListener("dragend", () => {
+        row.addEventListener("dragend", async () => {
             state.draggedItemId = null;
             state.folderDropTargetId = null;
             state.parentDropActive = false;
             setDragMoveMode(false);
             parentDropzoneEl.classList.remove("active");
-            renderList();
+            await renderList();
         });
 
         if (type === "folder") {
@@ -496,11 +482,11 @@ function renderList() {
                 }
             });
 
-            row.addEventListener("drop", event => {
+            row.addEventListener("drop", async event => {
                 event.preventDefault();
                 row.classList.remove("drop-target");
                 state.folderDropTargetId = null;
-                moveItemToFolder(state.draggedItemId, id);
+                await moveItemToFolder(state.draggedItemId, id);
             });
         }
     });
@@ -588,42 +574,49 @@ function renderDevices() {
     }
 }
 
-function render() {
+async function render() {
     backBtnEl.disabled = state.historyIndex === 0;
     forwardBtnEl.disabled = state.historyIndex >= state.history.length - 1;
     renderBreadcrumbs();
-    renderList();
+    await renderList();
     renderSelection();
 }
 
-function upload(files) {
+async function upload(files) {
+    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
+    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
+    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
     const currentFolder = getCurrentFolder();
-    const now = new Date().toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-    });
+    const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-    Array.from(files).forEach((file, index) => {
+    for (const file of Array.from(files)) {
+        const fileBytes = await file.arrayBuffer();
+        const encrypted = await encryptBlob(fileBytes, stashKeyBytes);
+        const { blobId } = await apiUploadBlob(stashId, token, encrypted);
+
         const kb = Math.max(1, Math.round(file.size / 1024));
         const newItem = {
-            id: "upload-" + Date.now() + "-" + index,
+            id: "file-" + Date.now(),
             name: file.name,
             type: "file",
             size: kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB",
-            modified: now
+            modified: now,
+            blobId
         };
 
         currentFolder.children.unshift(newItem);
         state.newItemIds.add(newItem.id);
-    });
+    }
+
+    const buffer = await encryptMetadata(vaultData, stashKeyBytes);
+    await apiPutMetadata(stashId, token, buffer);
 
     clearSelection();
     setDropActive(false);
-    render();
+    await render();
 }
 
-function addFolder() {
+async function addFolder() {
     const currentFolder = getCurrentFolder();
     const count = currentFolder.children.filter(
         item => item.type === "folder" && item.name.startsWith("new folder")
@@ -646,23 +639,44 @@ function addFolder() {
     state.selectedItemId = newFolder.id;
     state.newItemIds.add(newFolder.id);
     state.renamingItemId = newFolder.id;
-    render();
+    await render();
 }
 
-function deleteSelected() {
+async function deleteSelected() {
     const selected = getSelectedItem();
     if (!selected || selected.id === "root") return;
+
+    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
+    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
+    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
+
+    function collectBlobIds(node) {
+        const ids = [];
+        if (node.blobId) ids.push(node.blobId);
+        for (const child of node.children || []) ids.push(...collectBlobIds(child));
+        return ids;
+    }
+
+    const blobIds = collectBlobIds(selected);
+    await Promise.all(blobIds.map(blobId =>
+        fetch(`/stash/${stashId}/blob/${blobId}`, {
+            method: "DELETE",
+            headers: { "Authorization": `Bearer ${token}` }
+        })
+    ));
 
     const rowEl = listBodyEl.querySelector(`[data-id="${selected.id}"]`);
     if (rowEl) {
         rowEl.classList.add("exiting");
-        rowEl.addEventListener("animationend", () => {
+        rowEl.addEventListener("animationend", async () => {
             const found = findNodeAndParentById(selected.id);
             if (found?.parent?.children) {
                 found.parent.children = found.parent.children.filter(i => i.id !== selected.id);
             }
             clearSelection();
-            render();
+            const buffer = await encryptMetadata(vaultData, stashKeyBytes);
+            await apiPutMetadata(stashId, token, buffer);
+            await render();
         }, { once: true });
     } else {
         const found = findNodeAndParentById(selected.id);
@@ -670,22 +684,75 @@ function deleteSelected() {
             found.parent.children = found.parent.children.filter(i => i.id !== selected.id);
         }
         clearSelection();
-        render();
+        const buffer = await encryptMetadata(vaultData, stashKeyBytes);
+        await apiPutMetadata(stashId, token, buffer);
+        await render();
     }
 }
 
-function startInlineRename() {
+async function startInlineRename() {
     const selected = getSelectedItem();
     if (!selected || selected.id === "root") return;
 
     state.renamingItemId = selected.id;
-    renderList();
+    await renderList();
 }
 
-function downloadSelected() {
+async function downloadSelected() {
     const selected = getSelectedItem();
     if (!selected) return;
-    alert(`Download started for "${selected.name}"`);
+
+    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
+    const stashKeyBytes = fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey));
+    const token = localStorage.getItem(STORAGE_KEYS.sessionToken);
+
+    if (selected.type === "file") {
+        const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
+        const decrypted = await decryptBlob(buffer, stashKeyBytes);
+        const url = URL.createObjectURL(new Blob([decrypted]));
+        const a = document.createElement("a");
+
+        a.href = url;
+        a.download = selected.name;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        return;
+    }
+
+    const toast = document.createElement("div");
+    toast.className = "download-toast";
+    toast.textContent = "Downloading! Thank you for using stash!";
+    document.body.appendChild(toast);
+
+    const zip = new window.JSZip();
+
+    async function addToZip(node, folder) {
+        for (const child of node.children || []) {
+            if (child.type === "file") {
+                const buffer = await apiDownloadBlob(stashId, token, child.blobId);
+                const decrypted = await decryptBlob(buffer, stashKeyBytes);
+                folder.file(child.name, decrypted);
+            } else if (child.type === "folder") {
+                const subfolder = folder.folder(child.name);
+                await addToZip(child, subfolder);
+            }
+        }
+    }
+
+    await addToZip(selected, zip.folder(selected.name));
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+
+    a.href = url;
+    a.download = `${selected.name}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    toast.classList.add("hiding");
+    toast.addEventListener("animationend", () => toast.remove(), { once: true });
 }
 
 function isDescendantFolder(sourceId, targetFolderId) {
@@ -719,11 +786,11 @@ function canMoveItem(sourceId, targetFolderId) {
     return true;
 }
 
-function moveItemToFolder(sourceId, targetFolderId) {
+async function moveItemToFolder(sourceId, targetFolderId) {
     if (!canMoveItem(sourceId, targetFolderId)) {
         state.draggedItemId = null;
         setDragMoveMode(false);
-        render();
+        await render();
         return;
     }
 
@@ -740,10 +807,11 @@ function moveItemToFolder(sourceId, targetFolderId) {
     state.folderDropTargetId = null;
 
     setDragMoveMode(false);
-    render();
+    await saveMetadata();
+    await render();
 }
 
-function moveItemToParentFolder(sourceId) {
+async function moveItemToParentFolder(sourceId) {
     if (!sourceId || state.path.length === 0) return;
 
     const sourceFound = findNodeAndParentById(sourceId);
@@ -772,8 +840,10 @@ function moveItemToParentFolder(sourceId) {
     state.folderDropTargetId = null;
     state.parentDropActive = false;
     parentDropzoneEl.classList.remove("active");
+
     setDragMoveMode(false);
-    render();
+    await saveMetadata();
+    await render();
 }
 
 document.getElementById("uploadBtn").addEventListener("click", () => fileInputEl.click());
@@ -857,13 +927,13 @@ parentDropzoneEl.addEventListener("dragleave", () => {
     parentDropzoneEl.classList.remove("active");
 });
 
-parentDropzoneEl.addEventListener("drop", event => {
+parentDropzoneEl.addEventListener("drop", async event => {
     event.preventDefault();
     parentDropzoneEl.classList.remove("active");
-    moveItemToParentFolder(state.draggedItemId);
+    await moveItemToParentFolder(state.draggedItemId);
 });
 
-window.addEventListener("blur", () => {
+window.addEventListener("blur", async () => {
     setDropActive(false);
 
     if (!state.draggedItemId) return;
@@ -872,7 +942,7 @@ window.addEventListener("blur", () => {
     state.parentDropActive = false;
     parentDropzoneEl.classList.remove("active");
     setDragMoveMode(false);
-    renderList();
+    await renderList();
 });
 
 document.addEventListener("mouseleave", () => {
@@ -881,22 +951,46 @@ document.addEventListener("mouseleave", () => {
     }
 });
 
-vaultSearchEl.addEventListener("input", event => {
+vaultSearchEl.addEventListener("input", async event => {
     state.searchQuery = event.target.value;
     clearSelection();
-    renderList();
+    await renderList();
 });
 
-document.addEventListener("keydown", event => {
+document.addEventListener("keydown", async event => {
     if (event.key === "Escape" && state.renamingItemId) {
         state.renamingItemId = null;
-        renderList();
+        await renderList();
     }
 
     if (event.key === "F2" && state.selectedItemId && !state.renamingItemId) {
-        startInlineRename();
+        await startInlineRename();
     }
 });
 
-renderDevices();
-render();
+(async () => {
+    const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
+    const stashKey = localStorage.getItem(STORAGE_KEYS.stashKey);
+
+    if (!stashId || !stashKey) { window.location.replace("/"); return; }
+
+    const stashKeyBytes = fromBase64(stashKey);
+
+    try {
+        const token = await authenticate(stashId, stashKeyBytes);
+        const buffer = await apiGetMetadata(stashId, token);
+        if (buffer) {
+            const loaded = await decryptMetadata(buffer, stashKeyBytes);
+            Object.assign(vaultData, loaded);
+        }
+    } catch (err) {
+        localStorage.removeItem(STORAGE_KEYS.stashId);
+        localStorage.removeItem(STORAGE_KEYS.stashKey);
+        localStorage.removeItem(STORAGE_KEYS.sessionToken);
+        window.location.replace("/");
+        return;
+    }
+
+    renderDevices();
+    await render();
+})();

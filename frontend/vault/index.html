@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>stash vault - encrypted personal file storage</title>
+    <title>stash - encrypted personal file storage</title>
     <link rel="stylesheet" href="/vault/style.css" />
 </head>
 
@@ -83,7 +83,7 @@
                         </svg>
                     </div>
                     <h2>Nothing here yet.</h2>
-                    <p>Drop some files here to be securely stored and accessed from all your devices.</p>
+                    <p>Drop some files here to get started with stash!</p>
                     <button type="button" class="action" id="emptyUploadBtn">upload to vault</button>
                 </div>
 
@@ -124,7 +124,7 @@
                         </div>
                     </div>
 
-                    <p class="device-copy">See who is connected right now and which devices are currently offline.</p>
+                    <p class="device-copy">See and manage all of your connected devices</p>
 
                     <div class="device-list" id="deviceList"></div>
                 </div>
@@ -162,6 +162,10 @@
         <input type="file" id="fileInput" multiple hidden />
     </main>
 
+    <script type="module">
+        import JSZip from "https://esm.sh/jszip@3.10.1";
+        window.JSZip = JSZip;
+    </script>
     <script src="/core.js"></script>
     <script src="/vault/script.js"></script>
 </body>

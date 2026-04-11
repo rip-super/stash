@@ -144,3 +144,89 @@ async function apiGetRecoveryByRecoveryId(recoveryId) {
     if (!res.ok) throw new Error("Stash not found - check your phrase.");
     return res.json();
 }
+
+async function encryptMetadata(metadata, stashKeyBytes) {
+    const key = await deriveSubKey(stashKeyBytes, "stash:metadata", ["encrypt", "decrypt"]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(JSON.stringify(metadata));
+    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
+    const result = new Uint8Array(12 + ciphertext.byteLength);
+
+    result.set(iv, 0);
+    result.set(new Uint8Array(ciphertext), 12);
+
+    return result.buffer;
+}
+
+async function decryptMetadata(buffer, stashKeyBytes) {
+    const key = await deriveSubKey(stashKeyBytes, "stash:metadata", ["encrypt", "decrypt"]);
+    const iv = new Uint8Array(buffer, 0, 12);
+    const ciphertext = new Uint8Array(buffer, 12);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+
+    return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+async function apiGetMetadata(stashId, token) {
+    const res = await fetch(`/stash/${stashId}/metadata`, {
+        headers: { "Authorization": `Bearer ${token}` }
+    });
+
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error("Failed to fetch metadata");
+
+    return res.arrayBuffer();
+}
+
+async function apiPutMetadata(stashId, token, buffer) {
+    const res = await fetch(`/stash/${stashId}/metadata`, {
+        method: "PUT",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+        body: buffer
+    });
+
+    if (!res.ok) throw new Error("Failed to save metadata");
+}
+
+async function encryptBlob(fileBytes, stashKeyBytes) {
+    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, fileBytes);
+    const result = new Uint8Array(12 + ciphertext.byteLength);
+
+    result.set(iv, 0);
+    result.set(new Uint8Array(ciphertext), 12);
+
+    return result.buffer;
+}
+
+async function apiUploadBlob(stashId, token, buffer) {
+    const res = await fetch(`/stash/${stashId}/blob`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+        body: buffer
+    });
+
+    if (!res.ok) throw new Error("Upload failed");
+
+    return res.json();
+}
+
+async function decryptBlob(buffer, stashKeyBytes) {
+    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
+    const iv = new Uint8Array(buffer, 0, 12);
+    const ciphertext = new Uint8Array(buffer, 12);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+
+    return plaintext;
+}
+
+async function apiDownloadBlob(stashId, token, blobId) {
+    const res = await fetch(`/stash/${stashId}/blob/${blobId}`, {
+        headers: { "Authorization": `Bearer ${token}` }
+    });
+
+    if (!res.ok) throw new Error("Download failed");
+
+    return res.arrayBuffer();
+}
