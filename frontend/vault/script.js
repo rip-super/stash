@@ -132,6 +132,20 @@ function getVisibleItems(items) {
     return results;
 }
 
+function showToast(message) {
+    const toast = document.createElement("div");
+    toast.className = "download-toast";
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    return {
+        hide() {
+            toast.classList.add("hiding");
+            toast.addEventListener("animationend", () => toast.remove(), { once: true });
+        }
+    };
+}
+
 // #endregion
 
 // #region Icons
@@ -356,7 +370,7 @@ async function renderList() {
                 ${itemIcon(item.type)}
                 ${nameContent}
             </div>
-            <div class="meta-cell subtle">${item.type === "folder" ? "-" : item.size}</div>
+            <div class="meta-cell subtle">${item.type === "folder" ? "-" : item.pending ? "uploading..." : item.error ? "failed" : item.size}</div>
             <div class="meta-cell subtle">${item.modified}</div>
         </button>`;
     }).join("");
@@ -559,34 +573,61 @@ async function render() {
 
 async function uploadOneFile(file, folder) {
     const { stashId, stashKeyBytes, token } = getStashContext();
-    const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-
-    const encrypted = await encryptBlob(await file.arrayBuffer(), stashKeyBytes);
-    const { blobId } = await apiUploadBlob(stashId, token, encrypted);
-    const kb = Math.max(1, Math.round(file.size / 1024));
+    const now = new Date().toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+    });
 
     const newItem = {
         id: "file-" + crypto.randomUUID(),
         name: file.name,
         type: "file",
-        size: kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB",
+        size: "...",
         modified: now,
-        blobId
+        blobId: null,
+        pending: true
     };
 
     folder.children.unshift(newItem);
     state.newItemIds.add(newItem.id);
+
+    await renderList();
+
+    try {
+        const encrypted = await encryptBlob(await file.arrayBuffer(), stashKeyBytes);
+        const { blobId } = await apiUploadBlob(stashId, token, encrypted);
+
+        const kb = Math.max(1, Math.round(file.size / 1024));
+
+        newItem.blobId = blobId;
+        newItem.size = kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB";
+        newItem.pending = false;
+
+    } catch (err) {
+        newItem.pending = false;
+        newItem.error = true;
+        console.error("Upload failed:", err);
+    }
+
+    await renderList();
 }
 
 async function upload(files, targetFolder = getCurrentFolder()) {
-    for (const file of Array.from(files)) {
-        await uploadOneFile(file, targetFolder);
-    }
+    const toast = showToast("Uploading files! This might take a while...");
 
-    await saveMetadata();
-    clearSelection();
-    setDropActive(false);
-    await render();
+    try {
+        for (const file of Array.from(files)) {
+            await uploadOneFile(file, targetFolder);
+        }
+
+        await saveMetadata();
+        clearSelection();
+        setDropActive(false);
+        await render();
+    } finally {
+        toast.hide();
+    }
 }
 
 async function addFolder() {
@@ -615,6 +656,8 @@ async function deleteSelected() {
     if (!selected || selected.id === "root") return;
 
     const { stashId, token } = getStashContext();
+    const found = findNodeAndParentById(selected.id);
+    if (!found?.parent?.children) return;
 
     function collectBlobIds(node) {
         const ids = [];
@@ -623,29 +666,42 @@ async function deleteSelected() {
         return ids;
     }
 
-    await Promise.all(
-        collectBlobIds(selected).map(blobId =>
-            apiFetch(`/stash/${stashId}/blob/${blobId}`, { method: "DELETE", token })
-        )
-    );
-
     const rowEl = listBodyEl.querySelector(`[data-id="${selected.id}"]`);
-
-    const finalize = async () => {
-        const found = findNodeAndParentById(selected.id);
-        if (found?.parent?.children) {
-            found.parent.children = found.parent.children.filter(i => i.id !== selected.id);
-        }
-        clearSelection();
-        await saveMetadata();
-        await render();
-    };
+    const removedIndex = found.parent.children.findIndex(item => item.id === selected.id);
+    const removedItem = found.node;
 
     if (rowEl) {
-        rowEl.classList.add("exiting");
-        rowEl.addEventListener("animationend", finalize, { once: true });
-    } else {
-        await finalize();
+        await new Promise(resolve => {
+            rowEl.classList.add("exiting");
+            rowEl.addEventListener("animationend", resolve, { once: true });
+        });
+    }
+
+    found.parent.children = found.parent.children.filter(item => item.id !== selected.id);
+    clearSelection();
+    await render();
+
+    try {
+        const blobIds = collectBlobIds(removedItem);
+
+        if (blobIds.length) {
+            await apiFetch(`/stash/${stashId}/blobs`, {
+                method: "DELETE",
+                token,
+                body: JSON.stringify({ blobIds })
+            });
+        }
+
+        await saveMetadata();
+    } catch (error) {
+        console.error("Delete failed:", error);
+
+        found.parent.children.splice(removedIndex, 0, removedItem);
+        state.newItemIds.add(removedItem.id);
+        await render();
+
+        const toast = showToast(`${removedItem.type === "folder" ? "Folder" : "File"} deleting failed. Try again later.`);
+        setTimeout(() => toast.hide(), 2200);
     }
 }
 
@@ -677,10 +733,7 @@ async function downloadSelected() {
         return;
     }
 
-    const toast = document.createElement("div");
-    toast.className = "download-toast";
-    toast.textContent = "Downloading! Thank you for using stash!";
-    document.body.appendChild(toast);
+    showToast("Downloading! This might take while for large uploads...");
 
     const zip = new window.JSZip();
 
@@ -707,8 +760,7 @@ async function downloadSelected() {
 
     URL.revokeObjectURL(url);
 
-    toast.classList.add("hiding");
-    toast.addEventListener("animationend", () => toast.remove(), { once: true });
+    toast.hide();
 }
 
 // #endregion
@@ -874,6 +926,8 @@ document.addEventListener("drop", async event => {
         return;
     }
 
+    const toast = showToast("Uploading files! This might take a while...");
+
     const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     const rootFolder = getCurrentFolder();
 
@@ -901,6 +955,8 @@ document.addEventListener("drop", async event => {
 
             folder.children.unshift(childFolder);
             state.newItemIds.add(childFolder.id);
+
+            await renderList();
         }
 
         const reader = entry.createReader();
@@ -927,6 +983,8 @@ document.addEventListener("drop", async event => {
         await render();
     } catch (error) {
         console.error("Folder drop failed:", error);
+    } finally {
+        toast.hide();
     }
 });
 

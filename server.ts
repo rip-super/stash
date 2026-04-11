@@ -218,6 +218,35 @@ app.delete("/stash/:id/blob/:blobId", async c => {
     return c.json({ ok: true });
 });
 
+app.delete("/stash/:id/blobs", async c => {
+    const id = c.req.param("id");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const { blobIds } = await c.req.json<{ blobIds: string[] }>();
+
+    if (!Array.isArray(blobIds) || blobIds.some(blobId => typeof blobId !== "string")) {
+        return c.json({ error: "Invalid blobIds" }, 400);
+    }
+
+    let freedBytes = 0;
+
+    for (const blobId of blobIds) {
+        const path = join("./stashes", id, "blobs", blobId);
+        if (!existsSync(path)) continue;
+
+        const { size } = await stat(path);
+        await unlink(path);
+        freedBytes += size;
+    }
+
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    reg.stashes[id].quotaUsed = Math.max(0, reg.stashes[id].quotaUsed - freedBytes);
+    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+
+    return c.json({ ok: true });
+});
+
 app.use("/*", serveStatic({ root: "./frontend" }));
 
 serve({ fetch: app.fetch, port: 6003 }, info => {
