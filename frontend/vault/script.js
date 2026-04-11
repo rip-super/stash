@@ -557,27 +557,30 @@ async function render() {
 
 // #region File I/O
 
-async function upload(files) {
+async function uploadOneFile(file, folder) {
     const { stashId, stashKeyBytes, token } = getStashContext();
-    const currentFolder = getCurrentFolder();
     const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
+    const encrypted = await encryptBlob(await file.arrayBuffer(), stashKeyBytes);
+    const { blobId } = await apiUploadBlob(stashId, token, encrypted);
+    const kb = Math.max(1, Math.round(file.size / 1024));
+
+    const newItem = {
+        id: "file-" + crypto.randomUUID(),
+        name: file.name,
+        type: "file",
+        size: kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB",
+        modified: now,
+        blobId
+    };
+
+    folder.children.unshift(newItem);
+    state.newItemIds.add(newItem.id);
+}
+
+async function upload(files, targetFolder = getCurrentFolder()) {
     for (const file of Array.from(files)) {
-        const encrypted = await encryptBlob(await file.arrayBuffer(), stashKeyBytes);
-        const { blobId } = await apiUploadBlob(stashId, token, encrypted);
-        const kb = Math.max(1, Math.round(file.size / 1024));
-
-        const newItem = {
-            id: "file-" + Date.now(),
-            name: file.name,
-            type: "file",
-            size: kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB",
-            modified: now,
-            blobId
-        };
-
-        currentFolder.children.unshift(newItem);
-        state.newItemIds.add(newItem.id);
+        await uploadOneFile(file, targetFolder);
     }
 
     await saveMetadata();
@@ -854,14 +857,77 @@ document.addEventListener("dragleave", event => {
     }
 });
 
-document.addEventListener("drop", event => {
+document.addEventListener("drop", async event => {
     if (state.draggedItemId) return;
 
     event.preventDefault();
     setDropActive(false);
 
-    const files = event.dataTransfer?.files;
-    if (files?.length) upload(files);
+    const items = Array.from(event.dataTransfer?.items || []);
+    const entries = items
+        .map(item => item.webkitGetAsEntry?.())
+        .filter(Boolean);
+
+    if (!entries.length) {
+        const files = event.dataTransfer?.files;
+        if (files?.length) await upload(files);
+        return;
+    }
+
+    const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const rootFolder = getCurrentFolder();
+
+    async function walk(entry, folder) {
+        if (entry.isFile) {
+            const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+            await uploadOneFile(file, folder);
+            return;
+        }
+
+        if (!entry.isDirectory) return;
+
+        let childFolder = folder.children.find(
+            item => item.type === "folder" && item.name === entry.name
+        );
+
+        if (!childFolder) {
+            childFolder = {
+                id: "folder-" + crypto.randomUUID(),
+                name: entry.name,
+                type: "folder",
+                modified: now,
+                children: []
+            };
+
+            folder.children.unshift(childFolder);
+            state.newItemIds.add(childFolder.id);
+        }
+
+        const reader = entry.createReader();
+        const children = [];
+
+        while (true) {
+            const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+            if (!batch.length) break;
+            children.push(...batch);
+        }
+
+        for (const child of children) {
+            await walk(child, childFolder);
+        }
+    }
+
+    try {
+        for (const entry of entries) {
+            await walk(entry, rootFolder);
+        }
+
+        await saveMetadata();
+        clearSelection();
+        await render();
+    } catch (error) {
+        console.error("Folder drop failed:", error);
+    }
 });
 
 parentDropzoneEl.addEventListener("dragover", event => {
