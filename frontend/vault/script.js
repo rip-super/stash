@@ -146,6 +146,28 @@ function showToast(message) {
     };
 }
 
+function getUniqueChildName(folder, name) {
+    const children = folder.children || [];
+    const existingNames = new Set(children.map(child => child.name));
+
+    if (!existingNames.has(name)) return name;
+
+    const dotIndex = name.lastIndexOf(".");
+    const hasExtension = dotIndex > 0;
+    const base = hasExtension ? name.slice(0, dotIndex) : name;
+    const ext = hasExtension ? name.slice(dotIndex) : "";
+
+    let i = 1;
+    let nextName = `${base} (${i})${ext}`;
+
+    while (existingNames.has(nextName)) {
+        i++;
+        nextName = `${base} (${i})${ext}`;
+    }
+
+    return nextName;
+}
+
 // #endregion
 
 // #region Icons
@@ -336,8 +358,8 @@ async function renderList() {
     listStateEl.classList.remove("hidden");
 
     const ordered = [
-        ...visibleItems.filter(i => i.type === "folder"),
-        ...visibleItems.filter(i => i.type === "file")
+        ...visibleItems.filter(i => i.type === "folder").sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })),
+        ...visibleItems.filter(i => i.type === "file").sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
     ];
 
     listBodyEl.innerHTML = ordered.map((item, index) => {
@@ -581,7 +603,7 @@ async function uploadOneFile(file, folder) {
 
     const newItem = {
         id: "file-" + crypto.randomUUID(),
-        name: file.name,
+        name: getUniqueChildName(folder, file.name),
         type: "file",
         size: "...",
         modified: now,
@@ -638,7 +660,7 @@ async function addFolder() {
 
     const newFolder = {
         id: "folder-" + Date.now(),
-        name: count === 1 ? "new folder" : `new folder ${count}`,
+        name: getUniqueChildName(currentFolder, "new folder"),
         type: "folder",
         modified: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
         children: []
@@ -947,7 +969,7 @@ document.addEventListener("drop", async event => {
         if (!childFolder) {
             childFolder = {
                 id: "folder-" + crypto.randomUUID(),
-                name: entry.name,
+                name: getUniqueChildName(folder, entry.name),
                 type: "folder",
                 modified: now,
                 children: []
