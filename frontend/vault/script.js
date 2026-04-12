@@ -204,6 +204,29 @@ function stopDeviceRefresh() {
     }
 }
 
+function openModal(modal) {
+    if (!modal) return;
+    modal.classList.remove("hidden", "closing");
+    modal.setAttribute("aria-hidden", "false");
+    requestAnimationFrame(() => {
+        modal.classList.remove("closing");
+    });
+}
+
+function closeModal(modal) {
+    if (!modal || modal.classList.contains("hidden") || modal.classList.contains("closing")) return;
+
+    modal.classList.add("closing");
+    modal.setAttribute("aria-hidden", "true");
+
+    const finish = () => {
+        modal.classList.add("hidden");
+        modal.classList.remove("closing");
+    };
+
+    modal.addEventListener("transitionend", finish, { once: true });
+}
+
 // #endregion
 
 // #region Icons
@@ -695,11 +718,10 @@ function renderDevices() {
 
             const device = deviceData.find(entry => entry.id === btn.dataset.id);
             deviceDeleteCopyEl.textContent = device
-                ? `${device.name} will lose access until it is connected again.`
+                ? `"${device.name}" will lose access until it is connected again.`
                 : "This device will lose access until it is connected again.";
 
-            deviceDeleteModalEl.classList.remove("hidden");
-            deviceDeleteModalEl.setAttribute("aria-hidden", "false");
+            openModal(deviceDeleteModalEl);
         });
     });
 
@@ -1189,8 +1211,7 @@ document.addEventListener("keydown", async event => {
 });
 
 addDeviceBtnEl?.addEventListener("click", async () => {
-    deviceConnectModalEl.classList.remove("hidden");
-    deviceConnectModalEl.setAttribute("aria-hidden", "false");
+    openModal(deviceConnectModalEl);
     startDeviceRefresh();
 
     state.currentAccessCode = "";
@@ -1245,8 +1266,7 @@ addDeviceBtnEl?.addEventListener("click", async () => {
 document.querySelectorAll("[data-close-modal]").forEach(btn => {
     btn.addEventListener("click", async () => {
         const modal = document.getElementById(btn.dataset.closeModal);
-        modal.classList.add("hidden");
-        modal.setAttribute("aria-hidden", "true");
+        closeModal(modal);
 
         if (btn.dataset.closeModal === "deviceConnectModal") {
             stopDeviceRefresh();
@@ -1280,8 +1300,7 @@ confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
         }
 
         state.pendingDeviceDeleteId = null;
-        deviceDeleteModalEl.classList.add("hidden");
-        deviceDeleteModalEl.setAttribute("aria-hidden", "true");
+        closeModal(deviceDeleteModalEl);
     } catch (error) {
         console.error("Failed to remove device:", error);
         const toast = showToast("Could not remove device.");

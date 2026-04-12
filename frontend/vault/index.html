@@ -122,11 +122,13 @@
                             <p class="device-label">access</p>
                             <h2 class="device-title" id="devicePanelTitle">Connected Devices</h2>
                         </div>
-
-                        <span class="device-summary" id="deviceSummary">0 devices connected</span>
                     </div>
 
                     <p class="device-copy">See and manage all of your connected devices</p>
+
+                    <span class="device-summary" id="deviceSummary">
+                        0 devices connected
+                    </span>
 
                     <div class="device-list-wrap">
                         <div class="device-list" id="deviceList"></div>
@@ -199,7 +201,7 @@
         <div class="modal-shell hidden" id="deviceDeleteModal" aria-hidden="true">
             <div class="modal-backdrop" data-close-modal="deviceDeleteModal"></div>
 
-            <section class="device-modal-card danger" role="dialog" aria-modal="true" aria-labelledby="deviceDeleteTitle">
+            <section class="device-modal-card" role="dialog" aria-modal="true" aria-labelledby="deviceDeleteTitle">
                 <button type="button" class="selection-close modal-close-btn" data-close-modal="deviceDeleteModal"
                     aria-label="Close delete confirmation">
                     <svg viewBox="0 0 24 24" aria-hidden="true">

@@ -1016,7 +1016,6 @@ body::-webkit-scrollbar-corner,
     color: var(--text-muted);
     font-size: 0.92rem;
     line-height: 1.5;
-    margin-bottom: 1rem;
 }
 
 .device-list {
@@ -1382,32 +1381,40 @@ body::-webkit-scrollbar-corner,
     padding: 1.25rem;
 }
 
-.modal-shell.hidden {
-    display: none;
-}
-
 .modal-backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(5, 5, 10, 0.66);
-    backdrop-filter: blur(10px);
+    background: rgba(5, 5, 10, 0.95);
+    opacity: 0;
+    transition: opacity 0.24s ease;
 }
 
 .device-modal-card {
     position: relative;
     z-index: 1;
-    width: min(100%, 30rem);
+    width: min(100%, 28rem);
     border-radius: 1.4rem;
     border: 1px solid var(--panel-border);
     background: rgba(20, 18, 30, 0.96);
     box-shadow: var(--shadow-lg);
     padding: 1.2rem;
-    backdrop-filter: blur(14px);
-    animation: fadeInUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+    transition:
+        opacity 0.24s ease,
+        transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .device-modal-card.danger {
-    border-color: var(--danger-border);
+    background: var(--panel-strong);
+    border: 1px solid var(--panel-border);
+    box-shadow: var(--shadow-lg);
+}
+
+.device-modal-card.danger .selection-label,
+.device-modal-card.danger .selection-name,
+.device-modal-card.danger .modal-copy {
+    color: inherit;
 }
 
 .modal-copy {
@@ -1450,7 +1457,8 @@ body::-webkit-scrollbar-corner,
     border-radius: 1.2rem;
     border: 1px solid rgba(139, 126, 200, 0.18);
     background: rgba(255, 255, 255, 0.02);
-    margin-bottom: 0.9rem;
+    margin: 1rem 0 0.9rem;
+    min-height: 252px;
 }
 
 #deviceQrCanvas {
@@ -1458,6 +1466,21 @@ body::-webkit-scrollbar-corner,
     height: 220px;
     border-radius: 0.8rem;
     background: white;
+}
+
+#deviceQrCode {
+    width: 220px;
+    height: 220px;
+    display: grid;
+    place-items: center;
+    background: white;
+    border-radius: 0.8rem;
+    overflow: hidden;
+}
+
+#deviceQrCode img,
+#deviceQrCode canvas {
+    display: block;
 }
 
 .access-code-panel {
@@ -1470,7 +1493,6 @@ body::-webkit-scrollbar-corner,
     border-radius: 1.1rem;
     background: rgba(139, 126, 200, 0.08);
     border: 1px solid rgba(139, 126, 200, 0.22);
-    margin-bottom: 1rem;
 }
 
 .access-code-label {
@@ -1601,94 +1623,52 @@ body::-webkit-scrollbar-corner,
     display: grid;
     place-items: center;
     padding: 1.25rem;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+        opacity 0.24s ease,
+        visibility 0s linear 0.24s;
 }
 
 .modal-shell.hidden {
-    display: none;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 
-.modal-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(5, 5, 10, 0.66);
-    backdrop-filter: blur(10px);
+.modal-shell:not(.hidden) {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition:
+        opacity 0.24s ease,
+        visibility 0s linear 0s;
 }
 
-.device-modal-card {
-    position: relative;
-    z-index: 1;
-    width: min(100%, 28rem);
-    border-radius: 1.4rem;
-    border: 1px solid var(--panel-border);
-    background: rgba(20, 18, 30, 0.96);
-    box-shadow: var(--shadow-lg);
-    padding: 1.2rem;
-    backdrop-filter: blur(14px);
-    animation: fadeInUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+.modal-shell:not(.hidden) .modal-backdrop,
+.modal-shell:not(.hidden) .modal-backdrop::before {
+    opacity: 1;
 }
 
-.device-modal-card.danger {
-    border-color: var(--danger-border);
+.modal-shell:not(.hidden) .device-modal-card {
+    opacity: 1;
+    transform: translateY(0) scale(1);
 }
 
-.modal-copy {
-    margin-bottom: 1rem;
+.modal-shell.closing {
+    opacity: 0;
+    pointer-events: none;
 }
 
-.qr-wrap {
-    display: grid;
-    place-items: center;
-    padding: 1rem;
-    border-radius: 1.2rem;
-    border: 1px solid rgba(139, 126, 200, 0.18);
-    background: rgba(255, 255, 255, 0.02);
-    margin: 1rem 0 0.9rem;
-    min-height: 252px;
+.modal-shell.closing .modal-backdrop,
+.modal-shell.closing .modal-backdrop::before {
+    opacity: 0;
 }
 
-#deviceQrCode {
-    width: 220px;
-    height: 220px;
-    display: grid;
-    place-items: center;
-    background: white;
-    border-radius: 0.8rem;
-    overflow: hidden;
-}
-
-#deviceQrCode img,
-#deviceQrCode canvas {
-    display: block;
-}
-
-.access-code-panel {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.28rem;
-    text-align: center;
-    padding: 1rem;
-    border-radius: 1.1rem;
-    background: rgba(139, 126, 200, 0.08);
-    border: 1px solid rgba(139, 126, 200, 0.22);
-}
-
-.access-code-label {
-    color: var(--text-muted);
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-}
-
-.access-code-value {
-    font-family: "Bricolage Grotesque", sans-serif;
-    font-size: 2rem;
-    letter-spacing: 0.16em;
-}
-
-.access-code-expiry {
-    color: var(--text-muted);
-    font-size: 0.85rem;
+.modal-shell.closing .device-modal-card {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
 }
 
 .device-self-pill {
@@ -1706,6 +1686,40 @@ body::-webkit-scrollbar-corner,
 
 .device-row.is-current-device {
     border-color: rgba(139, 126, 200, 0.28);
+}
+
+.device-summary {
+    display: inline-flex;
+    align-self: center;
+    width: fit-content;
+    margin: 0.75rem auto 1rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    background: var(--connected-bg);
+    color: var(--connected);
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-align: center;
+}
+
+.modal-btn.danger {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--action-border);
+    transition:
+        border-color 0.22s ease,
+        background 0.22s ease,
+        color 0.22s ease,
+        transform 0.22s ease,
+        box-shadow 0.22s ease;
+}
+
+.modal-btn.danger:hover,
+.modal-btn.danger:focus-visible {
+    color: var(--danger);
+    border-color: var(--danger-border);
+    background: rgba(255, 142, 164, 0.1);
+    box-shadow: 0 10px 30px rgba(255, 142, 164, 0.12);
 }
 
 @keyframes grainShift {
