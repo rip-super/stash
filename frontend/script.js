@@ -1,4 +1,38 @@
-document.addEventListener("DOMContentLoaded", tryAutoLogin);
+document.addEventListener("DOMContentLoaded", async () => {
+    const params = new URLSearchParams(window.location.search);
+    const join = params.get("join");
+    const secret = params.get("secret");
+
+    if (join) {
+        const ua = navigator.userAgent || "";
+        const deviceType =
+            /iPad|Tablet/i.test(ua) ? "tablet" :
+                /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" :
+                    "desktop";
+
+        const deviceName =
+            deviceType === "mobile" ? "Phone" :
+                deviceType === "tablet" ? "Tablet" :
+                    "Desktop";
+
+        openModal(`
+            <div class="modal-title">Connecting device</div>
+            <div class="modal-sub">Securely signing you in...</div>
+            <div id="modal-error" style="font-size:0.85rem;color:#e06c6c;margin-top:0.75rem;text-align:center"></div>
+        `);
+
+        await joinByCode(join, {
+            secret,
+            deviceName,
+            deviceType,
+        });
+
+        history.replaceState({}, "", window.location.pathname);
+        return;
+    }
+
+    tryAutoLogin();
+});
 
 const [createBtn, joinBtn] = document.querySelectorAll(".action");
 
@@ -109,11 +143,17 @@ function showRecoveryPhrase(phrase) {
     };
 }
 
-async function joinByCode(code) {
-    try {
-        const { stashId, transfer } = await apiJoinByCode(code.trim().toUpperCase());
+async function joinByCode(code, options = {}) {
+    const normalizedCode = code.trim().toUpperCase();
 
-        const wrapKey = await deriveWrappingKey(code.trim().toUpperCase(), new Uint8Array(32));
+    try {
+        const { stashId, transfer } = await apiJoinByCode(normalizedCode, {
+            secret: options.secret,
+            deviceName: options.deviceName,
+            deviceType: options.deviceType,
+        });
+
+        const wrapKey = await deriveWrappingKey(normalizedCode, fromBase64(transfer.salt));
         const stashKey = await unwrapStashKey(transfer.encryptedKey, transfer.iv, wrapKey);
         const stashKeyBytes = await exportKeyBytes(stashKey);
 
@@ -124,7 +164,8 @@ async function joinByCode(code) {
         closeModal();
         enterStash();
     } catch (err) {
-        document.getElementById("modal-error").textContent = err.message;
+        const errorEl = document.getElementById("modal-error");
+        if (errorEl) errorEl.textContent = err.message || "Could not connect device.";
     }
 }
 

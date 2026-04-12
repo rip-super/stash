@@ -122,11 +122,19 @@
                             <p class="device-label">access</p>
                             <h2 class="device-title" id="devicePanelTitle">Connected Devices</h2>
                         </div>
+
+                        <span class="device-summary" id="deviceSummary">0 devices connected</span>
                     </div>
 
                     <p class="device-copy">See and manage all of your connected devices</p>
 
-                    <div class="device-list" id="deviceList"></div>
+                    <div class="device-list-wrap">
+                        <div class="device-list" id="deviceList"></div>
+                    </div>
+
+                    <div class="device-card-footer">
+                        <button type="button" class="action device-add-btn" id="addDeviceBtn">add device</button>
+                    </div>
                 </div>
             </section>
 
@@ -161,11 +169,62 @@
 
         <input type="file" id="fileInput" multiple hidden />
         <input type="file" id="folderInput" webkitdirectory multiple hidden />
+
+        <div class="modal-shell hidden" id="deviceConnectModal" aria-hidden="true">
+            <div class="modal-backdrop" data-close-modal="deviceConnectModal"></div>
+
+            <section class="device-modal-card" role="dialog" aria-modal="true" aria-labelledby="deviceConnectTitle">
+                <button type="button" class="selection-close modal-close-btn" data-close-modal="deviceConnectModal"
+                    aria-label="Close add device modal">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                </button>
+
+                <p class="selection-label">new device</p>
+                <h2 class="selection-name" id="deviceConnectTitle">Connect a device</h2>
+
+                <div class="qr-wrap">
+                    <div id="deviceQrCode" aria-label="Device access QR code"></div>
+                </div>
+
+                <div class="access-code-panel">
+                    <span class="access-code-label">Access code</span>
+                    <strong class="access-code-value" id="deviceAccessCode">------</strong>
+                    <span class="access-code-expiry" id="deviceAccessExpiry">Generating secure code…</span>
+                </div>
+            </section>
+        </div>
+
+        <div class="modal-shell hidden" id="deviceDeleteModal" aria-hidden="true">
+            <div class="modal-backdrop" data-close-modal="deviceDeleteModal"></div>
+
+            <section class="device-modal-card danger" role="dialog" aria-modal="true" aria-labelledby="deviceDeleteTitle">
+                <button type="button" class="selection-close modal-close-btn" data-close-modal="deviceDeleteModal"
+                    aria-label="Close delete confirmation">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                </button>
+
+                <p class="selection-label">remove device</p>
+                <h2 class="selection-name" id="deviceDeleteTitle">Remove connected device?</h2>
+                <p class="device-copy modal-copy" id="deviceDeleteCopy">This device will lose access until it is connected again.</p>
+
+                <div class="selection-actions">
+                    <button type="button" class="modal-btn danger" id="confirmRemoveDeviceBtn">remove device</button>
+                    <button type="button" class="modal-btn" data-close-modal="deviceDeleteModal">cancel</button>
+                </div>
+            </section>
+        </div>
     </main>
 
     <script type="module">
         import JSZip from "https://esm.sh/jszip@3.10.1";
+        import QRCode from "https://esm.sh/qrcode"
+
         window.JSZip = JSZip;
+        window.QRCode = QRCode;
     </script>
     <script src="/lib.js"></script>
     <script src="/vault/script.js"></script>

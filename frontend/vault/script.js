@@ -1,13 +1,7 @@
 // #region Constants
 
 const vaultData = { id: "root", name: "stash", type: "folder", children: [], modified: "" };
-
-const deviceData = [
-    { id: "dev-1", name: "MacBook Pro", type: "desktop", lastSeen: "Last seen just now" },
-    { id: "dev-2", name: "iPhone 15", type: "mobile", lastSeen: "Last seen 1 min ago" },
-    { id: "dev-3", name: "Work Laptop", type: "desktop", lastSeen: "Last seen 18 min ago" },
-    { id: "dev-4", name: "iPad Air", type: "tablet", lastSeen: "Last seen yesterday" },
-];
+const deviceData = [];
 
 const state = {
     path: [],
@@ -22,6 +16,9 @@ const state = {
     renamingItemId: null,
     navDirection: null,
     newItemIds: new Set(),
+    pendingDeviceDeleteId: null,
+    renamingDeviceId: null,
+    currentAccessCode: "",
 };
 
 // #endregion
@@ -47,6 +44,14 @@ const forwardBtnEl = document.getElementById("forwardBtn");
 const closeSelectionBtnEl = document.getElementById("closeSelectionBtn");
 const dragParentDockEl = document.getElementById("dragParentDock");
 const parentDropzoneEl = document.getElementById("parentDropzone");
+const addDeviceBtnEl = document.getElementById("addDeviceBtn");
+const deviceConnectModalEl = document.getElementById("deviceConnectModal");
+const deviceDeleteModalEl = document.getElementById("deviceDeleteModal");
+const deviceQrCodeEl = document.getElementById("deviceQrCode");
+const deviceAccessCodeEl = document.getElementById("deviceAccessCode");
+const deviceAccessExpiryEl = document.getElementById("deviceAccessExpiry");
+const confirmRemoveDeviceBtnEl = document.getElementById("confirmRemoveDeviceBtn");
+const deviceDeleteCopyEl = document.getElementById("deviceDeleteCopy");
 
 // #endregion
 
@@ -166,6 +171,12 @@ function getUniqueChildName(folder, name) {
     }
 
     return nextName;
+}
+
+async function loadDevices() {
+    const { stashId, token } = getStashContext();
+    const { devices } = await apiListDevices(stashId, token);
+    deviceData.splice(0, deviceData.length, ...(devices || []));
 }
 
 // #endregion
@@ -550,29 +561,112 @@ function renderDevices() {
             <div class="device-icon" aria-hidden="true">${deviceIcon(device.type)}</div>
             <div class="device-info">
                 <div class="device-name-row">
-                    <h3 class="device-name">${device.name}</h3>
-                    <button type="button" class="remove-device-btn" data-id="${device.id}" aria-label="Remove ${device.name}">&#10005;</button>
+                    ${state.renamingDeviceId === device.id
+            ? `<input
+                                type="text"
+                                class="device-inline-input"
+                                id="device-rename-input-${device.id}"
+                                value="${device.name.replace(/"/g, "&quot;")}"
+                                autocomplete="off"
+                                spellcheck="false"
+                           />`
+            : `<h3 class="device-name">${device.name}</h3>`
+        }
+
+                    <div class="device-row-actions">
+                        <button type="button" class="device-icon-btn rename-device-btn" data-id="${device.id}" aria-label="Rename ${device.name}">
+                            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                                <path d="M4 20h4l10-10-4-4L4 16v4zM13 7l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                            </svg>
+                        </button>
+                        <button type="button" class="remove-device-btn" data-id="${device.id}" aria-label="Remove ${device.name}">
+                            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                                <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
-                <div class="device-meta"><span>${device.lastSeen}</span></div>
+
+                <div class="device-meta">
+                    <span>${device.lastSeenLabel || device.lastSeen || "Last seen recently"}</span>
+                </div>
             </div>
         </div>
     `).join("");
 
-    deviceListEl.querySelectorAll(".remove-device-btn").forEach(btn => {
-        btn.addEventListener("click", () => {
-            const row = btn.closest(".device-row");
+    deviceListEl.querySelectorAll(".rename-device-btn").forEach(btn => {
+        btn.addEventListener("click", async event => {
+            event.stopPropagation();
+            state.renamingDeviceId = btn.dataset.id;
+            renderDevices();
 
-            row.classList.add("exiting");
-            row.addEventListener("transitionend", event => {
-                if (event.target !== row) return;
-                const idx = deviceData.findIndex(d => d.id === btn.dataset.id);
-                if (idx !== -1) deviceData.splice(idx, 1);
-                row.remove();
+            const input = document.getElementById(`device-rename-input-${btn.dataset.id}`);
+            if (!input) return;
 
-                if (deviceSummaryEl) {
-                    deviceSummaryEl.textContent = `${deviceData.length} device${deviceData.length === 1 ? "" : "s"} connected`;
+            requestAnimationFrame(() => {
+                input.focus();
+                input.select();
+            });
+
+            let committed = false;
+
+            const commit = async () => {
+                if (committed) return;
+                committed = true;
+
+                const name = input.value.trim();
+                const device = deviceData.find(entry => entry.id === btn.dataset.id);
+
+                if (name && device && name !== device.name) {
+                    const previousName = device.name;
+                    device.name = name;
+                    renderDevices();
+
+                    try {
+                        const { stashId, token } = getStashContext();
+                        await apiRenameDevice(stashId, token, btn.dataset.id, name);
+                    } catch (error) {
+                        device.name = previousName;
+                        console.error("Failed to rename device:", error);
+                        const toast = showToast("Could not rename device.");
+                        setTimeout(() => toast.hide(), 1800);
+                    }
                 }
-            }, { once: true });
+
+                state.renamingDeviceId = null;
+                renderDevices();
+            };
+
+            const cancel = () => {
+                if (committed) return;
+                committed = true;
+                state.renamingDeviceId = null;
+                renderDevices();
+            };
+
+            input.addEventListener("keydown", e => {
+                if (e.key === "Enter") { e.preventDefault(); commit(); }
+                if (e.key === "Escape") { e.preventDefault(); cancel(); }
+            });
+            input.addEventListener("blur", commit);
+            input.addEventListener("click", e => e.stopPropagation());
+            input.addEventListener("dblclick", e => e.stopPropagation());
+        });
+    });
+
+    deviceListEl.querySelectorAll(".remove-device-btn").forEach(btn => {
+        btn.addEventListener("click", event => {
+            event.stopPropagation();
+
+            state.pendingDeviceDeleteId = btn.dataset.id;
+
+            const device = deviceData.find(entry => entry.id === btn.dataset.id);
+            deviceDeleteCopyEl.textContent = device
+                ? `${device.name} will lose access until it is connected again.`
+                : "This device will lose access until it is connected again.";
+
+            deviceDeleteModalEl.classList.remove("hidden");
+            deviceDeleteModalEl.setAttribute("aria-hidden", "false");
         });
     });
 
@@ -1061,6 +1155,93 @@ document.addEventListener("keydown", async event => {
     }
 });
 
+addDeviceBtnEl?.addEventListener("click", async () => {
+    deviceConnectModalEl.classList.remove("hidden");
+    deviceConnectModalEl.setAttribute("aria-hidden", "false");
+
+    state.currentAccessCode = "";
+    deviceAccessCodeEl.textContent = "------";
+    deviceAccessExpiryEl.textContent = "Generating secure code…";
+    deviceQrCodeEl.innerHTML = "";
+
+    try {
+        const { stashId, stashKeyBytes, token } = getStashContext();
+
+        const { code, expiresIn } = await apiCreateAccessCode(stashId, token);
+
+        const salt = crypto.getRandomValues(new Uint8Array(32));
+        const wrapKey = await deriveWrappingKey(code, salt);
+        const stashKey = await crypto.subtle.importKey("raw", stashKeyBytes, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+        const wrapped = await wrapStashKey(stashKey, wrapKey);
+        const transfer = { ...wrapped, salt: toBase64(salt) };
+
+        await apiPutAccessCodeTransfer(stashId, token, code, transfer);
+
+        state.currentAccessCode = code;
+        deviceAccessCodeEl.textContent = code;
+        deviceAccessExpiryEl.textContent = `Valid for ${Math.floor(expiresIn / 60)} minutes`;
+
+        const joinUrl = `${window.location.origin}/?join=${encodeURIComponent(code)}`;
+
+        deviceQrCodeEl.innerHTML = "";
+        const canvas = document.createElement("canvas");
+        deviceQrCodeEl.appendChild(canvas);
+
+        await window.QRCode.toCanvas(canvas, joinUrl, {
+            width: 220,
+            margin: 1,
+            errorCorrectionLevel: "M",
+        });
+    } catch (error) {
+        console.error("Failed to generate access code:", error);
+        deviceAccessCodeEl.textContent = "ERROR";
+        deviceAccessExpiryEl.textContent = "Could not generate code";
+        const toast = showToast("Could not generate access code.");
+        setTimeout(() => toast.hide(), 2000);
+    }
+});
+
+document.querySelectorAll("[data-close-modal]").forEach(btn => {
+    btn.addEventListener("click", () => {
+        const modal = document.getElementById(btn.dataset.closeModal);
+        modal.classList.add("hidden");
+        modal.setAttribute("aria-hidden", "true");
+    });
+});
+
+confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
+    if (!state.pendingDeviceDeleteId) return;
+
+    const deviceId = state.pendingDeviceDeleteId;
+    const row = deviceListEl.querySelector(`.device-row[data-id="${deviceId}"]`);
+
+    try {
+        const { stashId, token } = getStashContext();
+        await apiRemoveDevice(stashId, token, deviceId);
+
+        if (row) {
+            row.classList.add("exiting");
+            row.addEventListener("transitionend", () => {
+                const idx = deviceData.findIndex(device => device.id === deviceId);
+                if (idx !== -1) deviceData.splice(idx, 1);
+                renderDevices();
+            }, { once: true });
+        } else {
+            const idx = deviceData.findIndex(device => device.id === deviceId);
+            if (idx !== -1) deviceData.splice(idx, 1);
+            renderDevices();
+        }
+
+        state.pendingDeviceDeleteId = null;
+        deviceDeleteModalEl.classList.add("hidden");
+        deviceDeleteModalEl.setAttribute("aria-hidden", "true");
+    } catch (error) {
+        console.error("Failed to remove device:", error);
+        const toast = showToast("Could not remove device.");
+        setTimeout(() => toast.hide(), 1800);
+    }
+});
+
 // #endregion
 
 // #region Init
@@ -1069,7 +1250,10 @@ document.addEventListener("keydown", async event => {
     const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
     const stashKey = localStorage.getItem(STORAGE_KEYS.stashKey);
 
-    if (!stashId || !stashKey) { window.location.replace("/"); return; }
+    if (!stashId || !stashKey) {
+        window.location.replace("/");
+        return;
+    }
 
     const stashKeyBytes = fromBase64(stashKey);
 
@@ -1077,6 +1261,7 @@ document.addEventListener("keydown", async event => {
         const token = await authenticate(stashId, stashKeyBytes);
         const buffer = await apiGetMetadata(stashId, token);
         if (buffer) Object.assign(vaultData, await decryptMetadata(buffer, stashKeyBytes));
+        await loadDevices();
     } catch {
         localStorage.removeItem(STORAGE_KEYS.stashId);
         localStorage.removeItem(STORAGE_KEYS.stashKey);

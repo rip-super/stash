@@ -18,11 +18,34 @@ interface Registry {
     stashes: Record<string, StashRecord>;
 }
 
+interface Device {
+    id: string;
+    name: string;
+    type: "desktop" | "mobile" | "tablet" | "server";
+    addedAt: number;
+    lastSeenAt: number;
+    lastSeenLabel: string;
+}
+
+type AccessCode = {
+    stashId: string;
+    expiresAt: number;
+    transfer?: {
+        iv: string;
+        encryptedKey: string;
+        salt: string;
+    };
+    pendingDevice?: {
+        name: string;
+        type: "desktop" | "mobile" | "tablet" | "server";
+    };
+};
+
 const app = new Hono();
 
 const challenges = new Map<string, { nonce: string, expiresAt: number }>();
 const sessions = new Map<string, { stashId: string, expiresAt: number }>();
-const accessCodes = new Map<string, { stashId: string, expiresAt: number, transfer: { iv: string, encryptedKey: string } }>();
+const accessCodes = new Map<string, AccessCode>();
 
 const QUOTA = 500 * 1024 * 1024;
 
@@ -55,6 +78,8 @@ app.post("/stash", async c => {
 
     reg.stashes[id] = { id, authVerifier, recoveryId, quotaUsed: 0, createdAt: Date.now() };
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+
+    await writeFile(join("./stashes", id, "devices.json"), JSON.stringify({ devices: [] }, null, 4));
 
     return c.json({ ok: true }, 201);
 });
@@ -114,36 +139,6 @@ app.get("/recovery/:recoveryId", async c => {
 
     const data = JSON.parse(await readFile(join("./stashes", stash.id, "recovery.json"), "utf-8"));
     return c.json({ stashId: stash.id, ...data });
-});
-
-app.post("/stash/:id/access-code", async c => {
-    const id = c.req.param("id");
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
-
-    const { transfer } = await c.req.json<{ transfer: { iv: string, encryptedKey: string } }>();
-    if (!transfer?.iv || !transfer?.encryptedKey) return c.json({ error: "Missing transfer blob" }, 400);
-
-    for (const [k, v] of accessCodes) if (v.stashId === id) accessCodes.delete(k);
-
-    const code = randomBytes(3).toString("hex").toUpperCase();
-    accessCodes.set(code, { stashId: id, expiresAt: Date.now() + 10 * 60 * 1000, transfer });
-
-    return c.json({ code, expiresIn: 600 });
-});
-
-app.post("/stash/join/:token", async c => {
-    const code = c.req.param("token").toUpperCase();
-    const entry = accessCodes.get(code);
-
-    if (!entry || Date.now() > entry.expiresAt) {
-        accessCodes.delete(code);
-        return c.json({ error: "Invalid or expired code" }, 404);
-    }
-
-    const { stashId, transfer } = entry;
-    accessCodes.delete(code);
-
-    return c.json({ stashId, transfer });
 });
 
 app.get("/stash/:id/metadata", async c => {
@@ -212,7 +207,7 @@ app.delete("/stash/:id/blob/:blobId", async c => {
     await unlink(path);
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
-    reg.stashes[id].quotaUsed -= size;
+    reg.stashes[id].quotaUsed = Math.max(0, reg.stashes[id].quotaUsed - size);
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
@@ -245,6 +240,219 @@ app.delete("/stash/:id/blobs", async c => {
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
+});
+
+app.get("/stash/:id/devices", async c => {
+    const id = c.req.param("id");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const path = join("./stashes", id, "devices.json");
+
+    if (!existsSync(path)) {
+        await writeFile(path, JSON.stringify({ devices: [] }, null, 4));
+    }
+
+    const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
+    return c.json(data);
+});
+
+app.post("/stash/:id/devices", async c => {
+    const id = c.req.param("id");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const { name, type } = await c.req.json<{
+        name: string,
+        type: "desktop" | "mobile" | "tablet" | "server"
+    }>();
+
+    if (!name || typeof name !== "string") return c.json({ error: "Missing device name" }, 400);
+    if (!["desktop", "mobile", "tablet", "server"].includes(type)) {
+        return c.json({ error: "Invalid device type" }, 400);
+    }
+
+    const path = join("./stashes", id, "devices.json");
+
+    if (!existsSync(path)) {
+        await writeFile(path, JSON.stringify({ devices: [] }, null, 4));
+    }
+
+    const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
+
+    const device: Device = {
+        id: "dev-" + randomBytes(8).toString("hex"),
+        name: name.trim(),
+        type,
+        addedAt: Date.now(),
+        lastSeenAt: Date.now(),
+        lastSeenLabel: "Last seen just now",
+    };
+
+    data.devices.unshift(device);
+    await writeFile(path, JSON.stringify(data, null, 4));
+
+    return c.json({ device }, 201);
+});
+
+app.patch("/stash/:id/devices/:deviceId", async c => {
+    const id = c.req.param("id");
+    const deviceId = c.req.param("deviceId");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const { name } = await c.req.json<{ name: string }>();
+    if (!name || typeof name !== "string") return c.json({ error: "Missing device name" }, 400);
+
+    const path = join("./stashes", id, "devices.json");
+
+    if (!existsSync(path)) {
+        await writeFile(path, JSON.stringify({ devices: [] }, null, 4));
+    }
+
+    const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
+    const device = data.devices.find(device => device.id === deviceId);
+
+    if (!device) {
+        return c.json({ error: "Device not found" }, 404);
+    }
+
+    device.name = name.trim();
+
+    await writeFile(path, JSON.stringify(data, null, 4));
+    return c.json({ device });
+});
+
+app.delete("/stash/:id/devices/:deviceId", async c => {
+    const id = c.req.param("id");
+    const deviceId = c.req.param("deviceId");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const path = join("./stashes", id, "devices.json");
+
+    if (!existsSync(path)) {
+        await writeFile(path, JSON.stringify({ devices: [] }, null, 4));
+    }
+
+    const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
+    const before = data.devices.length;
+
+    data.devices = data.devices.filter(device => device.id !== deviceId);
+
+    if (data.devices.length === before) {
+        return c.json({ error: "Device not found" }, 404);
+    }
+
+    await writeFile(path, JSON.stringify(data, null, 4));
+    return c.json({ ok: true });
+});
+
+app.post("/stash/:id/access-code", async c => {
+    const id = c.req.param("id");
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const body = await c.req.json<{
+        device?: { name: string, type: "desktop" | "mobile" | "tablet" | "server" }
+    }>().catch(() => ({ device: undefined }));
+
+    const { device } = body;
+
+    if (device && (!device.name || !["desktop", "mobile", "tablet", "server"].includes(device.type))) {
+        return c.json({ error: "Invalid device payload" }, 400);
+    }
+
+    for (const [k, v] of accessCodes) if (v.stashId === id) accessCodes.delete(k);
+
+    const code = randomBytes(3).toString("hex").toUpperCase();
+    accessCodes.set(code, {
+        stashId: id,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+        pendingDevice: device
+    });
+
+    return c.json({ code, expiresIn: 600 });
+});
+
+app.put("/stash/:id/access-code/:code", async c => {
+    const id = c.req.param("id");
+    const code = c.req.param("code").toUpperCase();
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const entry = accessCodes.get(code);
+    if (!entry || entry.stashId !== id || Date.now() > entry.expiresAt) {
+        accessCodes.delete(code);
+        return c.json({ error: "Invalid or expired code" }, 404);
+    }
+
+    const { transfer } = await c.req.json<{
+        transfer: { iv: string, encryptedKey: string, salt: string }
+    }>();
+
+    if (!transfer?.iv || !transfer?.encryptedKey || !transfer?.salt) {
+        return c.json({ error: "Missing transfer blob" }, 400);
+    }
+
+    entry.transfer = transfer;
+    accessCodes.set(code, entry);
+
+    return c.json({ ok: true });
+});
+
+app.post("/stash/join/:token", async c => {
+    const code = c.req.param("token").toUpperCase();
+    const entry = accessCodes.get(code);
+
+    if (!entry || Date.now() > entry.expiresAt) {
+        accessCodes.delete(code);
+        return c.json({ error: "Invalid or expired code" }, 404);
+    }
+
+    const body = await c.req.json().catch(() => ({})) as {
+        deviceName?: string;
+        deviceType?: "desktop" | "mobile" | "tablet" | "server";
+    };
+
+    if (!entry.transfer) {
+        return c.json({ error: "Access code not ready yet" }, 409);
+    }
+
+    const { stashId, transfer, pendingDevice } = entry;
+    accessCodes.delete(code);
+
+    const resolvedName =
+        pendingDevice?.name?.trim() ||
+        (typeof body.deviceName === "string" ? body.deviceName.trim() : "");
+
+    const resolvedType =
+        pendingDevice?.type ||
+        (["desktop", "mobile", "tablet", "server"].includes(body.deviceType || "")
+            ? body.deviceType
+            : undefined);
+
+    if (resolvedName && resolvedType) {
+        const path = join("./stashes", stashId, "devices.json");
+
+        if (!existsSync(path)) {
+            await writeFile(path, JSON.stringify({ devices: [] }, null, 4));
+        }
+
+        const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
+
+        data.devices.unshift({
+            id: "dev-" + randomBytes(8).toString("hex"),
+            name: resolvedName,
+            type: resolvedType,
+            addedAt: Date.now(),
+            lastSeenAt: Date.now(),
+            lastSeenLabel: "Last seen just now",
+        });
+
+        await writeFile(path, JSON.stringify(data, null, 4));
+    }
+
+    return c.json({ stashId, transfer });
 });
 
 app.use("/*", serveStatic({ root: "./frontend" }));

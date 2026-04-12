@@ -231,8 +231,13 @@ async function apiDownloadBlob(stashId, token, blobId) {
     return res.arrayBuffer();
 }
 
-async function apiJoinByCode(code) {
-    const res = await apiFetch(`/stash/join/${code}`, { method: "POST" });
+async function apiJoinByCode(code, payload = {}) {
+    const res = await apiFetch(`/stash/join/${encodeURIComponent(code)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
     return res.json();
 }
 
@@ -243,6 +248,48 @@ async function apiGetRecovery(stashId) {
 
 async function apiGetRecoveryByRecoveryId(recoveryId) {
     const res = await apiFetch(`/recovery/${recoveryId}`);
+    return res.json();
+}
+
+async function apiListDevices(stashId, token) {
+    const res = await apiFetch(`/stash/${stashId}/devices`, { token });
+    return res.json();
+}
+
+async function apiRenameDevice(stashId, token, deviceId, name) {
+    const res = await apiFetch(`/stash/${stashId}/devices/${deviceId}`, {
+        method: "PATCH",
+        token,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+    });
+    return res.json();
+}
+
+async function apiRemoveDevice(stashId, token, deviceId) {
+    await apiFetch(`/stash/${stashId}/devices/${deviceId}`, {
+        method: "DELETE",
+        token,
+    });
+}
+
+async function apiCreateAccessCode(stashId, token, device) {
+    const res = await apiFetch(`/stash/${stashId}/access-code`, {
+        method: "POST",
+        token,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device }),
+    });
+    return res.json();
+}
+
+async function apiPutAccessCodeTransfer(stashId, token, code, transfer) {
+    const res = await apiFetch(`/stash/${stashId}/access-code/${encodeURIComponent(code)}`, {
+        method: "PUT",
+        token,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transfer }),
+    });
     return res.json();
 }
 
