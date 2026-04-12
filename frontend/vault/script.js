@@ -1195,7 +1195,7 @@ addDeviceBtnEl?.addEventListener("click", async () => {
 
     state.currentAccessCode = "";
     deviceAccessCodeEl.textContent = "------";
-    deviceAccessExpiryEl.textContent = "Generating secure code…";
+    deviceAccessExpiryEl.textContent = "Generating secure code...";
     deviceQrCodeEl.innerHTML = "";
 
     try {

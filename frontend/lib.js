@@ -259,6 +259,15 @@ async function apiGetRecoveryByRecoveryId(recoveryId) {
     return res.json();
 }
 
+async function apiCreateRecoveryDevice(recoveryId, name, type) {
+    const res = await apiFetch(`/recovery/${encodeURIComponent(recoveryId)}/device`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, type }),
+    });
+    return res.json();
+}
+
 async function apiListDevices(stashId, token) {
     const res = await apiFetch(`/stash/${stashId}/devices`, { token });
     return res.json();

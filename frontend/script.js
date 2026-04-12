@@ -186,24 +186,33 @@ async function joinByCode(code, options = {}) {
 
 async function recoveryByPhrase(phrase) {
     try {
-        const stashKeyBytes = await phraseToBytes(phrase.trim());
-        const recoveryId = await deriveRecoveryId(stashKeyBytes);
-        const recovery = await apiGetRecoveryByRecoveryId(recoveryId);
+        const phraseBytes = await phraseToBytes(phrase);
+        const recoveryId = await deriveRecoveryId(phraseBytes);
 
-        const salt = fromBase64(recovery.salt);
-        const wrapKey = await deriveWrappingKey(phrase.trim(), salt);
-        const stashKey = await unwrapStashKey(recovery.encryptedKey, recovery.iv, wrapKey);
-        const resolvedKeyBytes = await exportKeyBytes(stashKey);
+        const recovery = await apiGetRecoveryByRecoveryId(recoveryId);
+        if (!recovery?.stashId || !recovery?.salt || !recovery?.iv || !recovery?.encryptedKey) {
+            throw new Error("Invalid recovery data");
+        }
+
+        const wrappingKey = await deriveWrappingKey(phrase, fromBase64(recovery.salt));
+        const stashKey = await unwrapStashKey(recovery.encryptedKey, recovery.iv, wrappingKey);
+        const stashKeyBytes = await exportKeyBytes(stashKey);
+
+        const ua = navigator.userAgent || "";
+        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
+        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
+
+        const { device } = await apiCreateRecoveryDevice(recoveryId, deviceName, deviceType);
 
         localStorage.setItem(STORAGE_KEYS.stashId, recovery.stashId);
-        localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(resolvedKeyBytes));
-        localStorage.removeItem(STORAGE_KEYS.deviceId);
+        localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(stashKeyBytes));
+        localStorage.setItem(STORAGE_KEYS.deviceId, device.id);
 
-        await authenticate(recovery.stashId, resolvedKeyBytes);
-        closeModal();
+        await authenticate(recovery.stashId, stashKeyBytes);
         enterStash();
     } catch (err) {
-        document.getElementById("modal-error").textContent = err.message || "Recovery failed - check your phrase.";
+        document.getElementById("modal-error").textContent =
+            err.message || "Recovery failed - check your phrase.";
     }
 }
 

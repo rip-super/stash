@@ -179,6 +179,49 @@ app.get("/recovery/:recoveryId", async c => {
     return c.json({ stashId: stash.id, ...data });
 });
 
+app.post("/recovery/:recoveryId/device", async c => {
+    const recoveryId = c.req.param("recoveryId");
+
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    const stash = Object.values(reg.stashes).find(s => s.recoveryId === recoveryId);
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    const { name, type } = await c.req.json<{
+        name: string,
+        type: "desktop" | "mobile" | "tablet" | "server"
+    }>();
+
+    if (!name || typeof name !== "string") {
+        return c.json({ error: "Missing device name" }, 400);
+    }
+
+    if (!["desktop", "mobile", "tablet", "server"].includes(type)) {
+        return c.json({ error: "Invalid device type" }, 400);
+    }
+
+    const path = join("./stashes", stash.id, "devices.json");
+
+    if (!existsSync(path)) {
+        await writeFile(path, JSON.stringify({ devices: [] }, null, 4));
+    }
+
+    const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
+
+    const device: Device = {
+        id: "dev-" + randomBytes(8).toString("hex"),
+        name: name.trim(),
+        type,
+        addedAt: Date.now(),
+        lastSeenAt: Date.now(),
+        lastSeenLabel: "Last seen just now",
+    };
+
+    data.devices.unshift(device);
+    await writeFile(path, JSON.stringify(data, null, 4));
+
+    return c.json({ stashId: stash.id, device }, 201);
+});
+
 app.get("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
 
