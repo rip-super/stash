@@ -5,15 +5,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (join) {
         const ua = navigator.userAgent || "";
-        const deviceType =
-            /iPad|Tablet/i.test(ua) ? "tablet" :
-                /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" :
-                    "desktop";
-
-        const deviceName =
-            deviceType === "mobile" ? "Phone" :
-                deviceType === "tablet" ? "Tablet" :
-                    "Desktop";
+        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
+        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
 
         openModal(`
             <div class="modal-title">Connecting device</div>

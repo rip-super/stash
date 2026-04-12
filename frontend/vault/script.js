@@ -738,6 +738,26 @@ async function render() {
     renderSelection();
 }
 
+async function loadAndRenderQuota() {
+    const { stashId, token } = getStashContext();
+    const quotaFillEl = document.getElementById("quotaFill");
+    const quotaValueEl = document.getElementById("quotaValue");
+
+    try {
+        const { used, limit } = await apiGetQuota(stashId, token);
+        const pct = Math.min((used / limit) * 100, 100);
+        const usedMB = (used / 1024 / 1024).toFixed(1);
+        const limitMB = Math.round(limit / 1024 / 1024);
+
+        quotaFillEl.style.width = pct + "%";
+        quotaFillEl.classList.toggle("warn", pct >= 70 && pct < 90);
+        quotaFillEl.classList.toggle("crit", pct >= 90);
+        quotaValueEl.textContent = `${usedMB} / ${limitMB} MB`;
+    } catch {
+        quotaValueEl.textContent = "unavailable";
+    }
+}
+
 // #endregion
 
 // #region File I/O
@@ -774,11 +794,13 @@ async function uploadOneFile(file, folder) {
         newItem.blobId = blobId;
         newItem.size = kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB";
         newItem.pending = false;
-
+        await saveMetadata();
+        await loadAndRenderQuota();
     } catch (err) {
         newItem.pending = false;
         newItem.error = true;
-        console.error("Upload failed:", err);
+        const toast = showToast(`Upload failed: ${err.message}`);
+        setTimeout(() => toast.hide(), 3500);
     }
 
     await renderList();
@@ -797,16 +819,13 @@ async function upload(files, targetFolder = getCurrentFolder()) {
         setDropActive(false);
         await render();
     } finally {
+        await loadAndRenderQuota();
         toast.hide();
     }
 }
 
 async function addFolder() {
     const currentFolder = getCurrentFolder();
-    const count = currentFolder.children.filter(
-        item => item.type === "folder" && item.name.startsWith("new folder")
-    ).length + 1;
-
     const newFolder = {
         id: "folder-" + Date.now(),
         name: getUniqueChildName(currentFolder, "new folder"),
@@ -873,6 +892,8 @@ async function deleteSelected() {
 
         const toast = showToast(`${removedItem.type === "folder" ? "Folder" : "File"} deleting failed. Try again later.`);
         setTimeout(() => toast.hide(), 2200);
+    } finally {
+        await loadAndRenderQuota();
     }
 }
 
@@ -1155,6 +1176,7 @@ document.addEventListener("drop", async event => {
     } catch (error) {
         console.error("Folder drop failed:", error);
     } finally {
+        await loadAndRenderQuota();
         toast.hide();
     }
 });
@@ -1339,6 +1361,7 @@ confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
     }
 
     renderDevices();
+    await loadAndRenderQuota();
     await render();
 })();
 

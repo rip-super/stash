@@ -1722,6 +1722,53 @@ body::-webkit-scrollbar-corner,
     box-shadow: 0 10px 30px rgba(255, 142, 164, 0.12);
 }
 
+.quota-wrap {
+    padding: 0.75rem 0 0.6rem;
+    border-top: 1px solid rgba(139, 126, 200, 0.1);
+    margin-top: auto;
+}
+
+.quota-label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.quota-label {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+
+.quota-value {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+
+.quota-track {
+    height: 5px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.quota-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--connected);
+    transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1), background 0.4s ease;
+}
+
+.quota-fill.warn {
+    background: var(--idle);
+}
+
+.quota-fill.crit {
+    background: var(--danger);
+}
+
 @keyframes grainShift {
     0% {
         background-position: 0 0, 0 0, 0 0, 0 0, 0 0;

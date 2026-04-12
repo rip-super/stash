@@ -1,4 +1,5 @@
 import { Hono, Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { readFile, writeFile, mkdir, stat, unlink } from "fs/promises";
@@ -245,7 +246,7 @@ app.put("/stash/:id/metadata", async c => {
     return c.json({ ok: true });
 });
 
-app.post("/stash/:id/blob", async c => {
+app.post("/stash/:id/blob", bodyLimit({ maxSize: 510 * 1024 * 1024 }), async c => {
     const id = c.req.param("id");
 
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
@@ -437,6 +438,17 @@ app.delete("/stash/:id/devices/:deviceId", async c => {
 
     await writeFile(path, JSON.stringify(data, null, 4));
     return c.json({ ok: true });
+});
+
+app.get("/stash/:id/quota", async c => {
+    const id = c.req.param("id");
+
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+
+    return c.json({ used: reg.stashes[id].quotaUsed, limit: QUOTA });
 });
 
 app.post("/stash/:id/access-code", async c => {

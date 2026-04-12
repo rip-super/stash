@@ -310,4 +310,9 @@ async function apiPutAccessCodeTransfer(stashId, token, code, transfer) {
     return res.json();
 }
 
+async function apiGetQuota(stashId, token) {
+    const res = await apiFetch(`/stash/${stashId}/quota`, { token });
+    return res.json();
+}
+
 // #endregion
