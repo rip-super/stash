@@ -2,7 +2,7 @@ import { Hono, Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { readFile, writeFile, mkdir, stat, unlink } from "fs/promises";
+import { readFile, writeFile, mkdir, stat, unlink, rm } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -103,6 +103,21 @@ app.post("/stash", async c => {
     await writeFile(join("./stashes", id, "devices.json"), JSON.stringify({ devices: [firstDevice] }, null, 4));
 
     return c.json({ ok: true, device: firstDevice }, 201);
+});
+
+app.delete("/stash/:id", async c => {
+    const id = c.req.param("id");
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+
+    delete reg.stashes[id];
+    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+
+    await rm(join("./stashes", id), { recursive: true, force: true });
+
+    return c.json({ ok: true });
 });
 
 app.get("/stash/:id/challenge", async c => {

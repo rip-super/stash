@@ -52,6 +52,9 @@ const deviceAccessCodeEl = document.getElementById("deviceAccessCode");
 const deviceAccessExpiryEl = document.getElementById("deviceAccessExpiry");
 const confirmRemoveDeviceBtnEl = document.getElementById("confirmRemoveDeviceBtn");
 const deviceDeleteCopyEl = document.getElementById("deviceDeleteCopy");
+const deleteStashModalEl = document.getElementById("deleteStashModal");
+const deleteStashBtnEl = document.getElementById("deleteStashBtn");
+const confirmDeleteStashBtnEl = document.getElementById("confirmDeleteStashBtn");
 
 // #endregion
 
@@ -1328,6 +1331,23 @@ confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
         const toast = showToast("Could not remove device.");
         setTimeout(() => toast.hide(), 1800);
     }
+});
+
+document.getElementById("deleteStashBtn").addEventListener("click", () => {
+    openModal(deleteStashModalEl);
+});
+
+document.getElementById("confirmDeleteStashBtn").addEventListener("click", async () => {
+    const { stashId, token } = getStashContext();
+    try {
+        await apiFetch(`/stash/${stashId}`, { method: "DELETE", token });
+    } catch { }
+
+    localStorage.removeItem(STORAGE_KEYS.stashId);
+    localStorage.removeItem(STORAGE_KEYS.stashKey);
+    localStorage.removeItem(STORAGE_KEYS.sessionToken);
+    localStorage.removeItem(STORAGE_KEYS.deviceId);
+    window.location.replace("/");
 });
 
 // #endregion

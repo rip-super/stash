@@ -145,7 +145,8 @@
                     </div>
 
                     <div class="device-card-footer">
-                        <button type="button" class="action device-add-btn" id="addDeviceBtn">add device</button>
+                        <button type="button" class="action ghost device-add-btn" id="addDeviceBtn">add device</button>
+                        <button type="button" class="action ghost danger-ghost" id="deleteStashBtn">delete stash</button>
                     </div>
                 </div>
             </section>
@@ -226,6 +227,24 @@
                 <div class="selection-actions">
                     <button type="button" class="modal-btn danger" id="confirmRemoveDeviceBtn">remove device</button>
                     <button type="button" class="modal-btn" data-close-modal="deviceDeleteModal">cancel</button>
+                </div>
+            </section>
+        </div>
+
+        <div class="modal-shell hidden" id="deleteStashModal" aria-hidden="true">
+            <div class="modal-backdrop" data-close-modal="deleteStashModal"></div>
+            <section class="device-modal-card" role="dialog" aria-modal="true" aria-labelledby="deleteStashTitle">
+                <button type="button" class="selection-close modal-close-btn" data-close-modal="deleteStashModal" aria-label="Close">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                </button>
+                <p class="selection-label">danger zone</p>
+                <h2 class="selection-name" id="deleteStashTitle">Delete this stash?</h2>
+                <p class="device-copy modal-copy">This will permanently delete all files, folders, and devices. This cannot be undone.</p>
+                <div class="selection-actions">
+                    <button type="button" class="modal-btn danger" id="confirmDeleteStashBtn">delete stash forever</button>
+                    <button type="button" class="modal-btn" data-close-modal="deleteStashModal">cancel</button>
                 </div>
             </section>
         </div>
