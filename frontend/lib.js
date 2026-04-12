@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
     stashId: "stash.id",
     stashKey: "stash.key",
     sessionToken: "stash.session",
+    deviceId: "stash.deviceId",
 };
 
 const toBase64 = bytes => btoa(String.fromCharCode(...bytes));
@@ -115,8 +116,14 @@ async function authenticate(stashId, stashKeyBytes) {
     const sig = await crypto.subtle.sign("HMAC", hmacKey, new TextEncoder().encode(nonce));
     const response = toHex(new Uint8Array(sig));
 
-    const { token } = await apiAuth(stashId, response);
+    const deviceId = localStorage.getItem(STORAGE_KEYS.deviceId);
+    const { token, deviceId: resolvedDeviceId } = await apiAuth(stashId, response, deviceId);
+
     localStorage.setItem(STORAGE_KEYS.sessionToken, token);
+    if (resolvedDeviceId) {
+        localStorage.setItem(STORAGE_KEYS.deviceId, resolvedDeviceId);
+    }
+
     return token;
 }
 
@@ -176,12 +183,13 @@ async function apiFetch(url, { token, ...opts } = {}) {
     return res;
 }
 
-async function apiCreateStash({ id, authVerifier, recoveryId, recovery }) {
-    await apiFetch("/stash", {
+async function apiCreateStash({ id, authVerifier, recoveryId, recovery, device }) {
+    const res = await apiFetch("/stash", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, authVerifier, recoveryId, recovery }),
+        body: JSON.stringify({ id, authVerifier, recoveryId, recovery, device }),
     });
+    return res.json();
 }
 
 async function apiGetChallenge(stashId) {
@@ -189,11 +197,11 @@ async function apiGetChallenge(stashId) {
     return res.json();
 }
 
-async function apiAuth(stashId, response) {
+async function apiAuth(stashId, response, deviceId) {
     const res = await apiFetch(`/stash/${stashId}/auth`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response }),
+        body: JSON.stringify({ response, deviceId }),
     });
     return res.json();
 }

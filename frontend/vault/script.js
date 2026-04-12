@@ -62,6 +62,7 @@ function getStashContext() {
         stashId: localStorage.getItem(STORAGE_KEYS.stashId),
         stashKeyBytes: fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey)),
         token: localStorage.getItem(STORAGE_KEYS.sessionToken),
+        deviceId: localStorage.getItem(STORAGE_KEYS.deviceId),
     };
 }
 
@@ -175,8 +176,32 @@ function getUniqueChildName(folder, name) {
 
 async function loadDevices() {
     const { stashId, token } = getStashContext();
-    const { devices } = await apiListDevices(stashId, token);
+    const { devices, currentDeviceId } = await apiListDevices(stashId, token);
     deviceData.splice(0, deviceData.length, ...(devices || []));
+    if (currentDeviceId) {
+        localStorage.setItem(STORAGE_KEYS.deviceId, currentDeviceId);
+    }
+}
+
+let deviceRefreshTimer = null;
+
+function startDeviceRefresh() {
+    stopDeviceRefresh();
+    deviceRefreshTimer = setInterval(async () => {
+        try {
+            await loadDevices();
+            renderDevices();
+        } catch (error) {
+            console.error("Failed to refresh devices:", error);
+        }
+    }, 2000);
+}
+
+function stopDeviceRefresh() {
+    if (deviceRefreshTimer) {
+        clearInterval(deviceRefreshTimer);
+        deviceRefreshTimer = null;
+    }
 }
 
 // #endregion
@@ -556,13 +581,18 @@ function renderSelection() {
 }
 
 function renderDevices() {
-    deviceListEl.innerHTML = deviceData.map(device => `
-        <div class="device-row" data-id="${device.id}">
+    const { deviceId: currentDeviceId } = getStashContext();
+
+    deviceListEl.innerHTML = deviceData.map(device => {
+        const isCurrentDevice = device.id === currentDeviceId;
+
+        return `
+        <div class="device-row ${isCurrentDevice ? "is-current-device" : ""}" data-id="${device.id}">
             <div class="device-icon" aria-hidden="true">${deviceIcon(device.type)}</div>
             <div class="device-info">
                 <div class="device-name-row">
                     ${state.renamingDeviceId === device.id
-            ? `<input
+                ? `<input
                                 type="text"
                                 class="device-inline-input"
                                 id="device-rename-input-${device.id}"
@@ -570,8 +600,8 @@ function renderDevices() {
                                 autocomplete="off"
                                 spellcheck="false"
                            />`
-            : `<h3 class="device-name">${device.name}</h3>`
-        }
+                : `<h3 class="device-name">${device.name}${isCurrentDevice ? `<span class="device-self-pill">This device</span>` : ""}</h3>`
+            }
 
                     <div class="device-row-actions">
                         <button type="button" class="device-icon-btn rename-device-btn" data-id="${device.id}" aria-label="Rename ${device.name}">
@@ -579,11 +609,13 @@ function renderDevices() {
                                 <path d="M4 20h4l10-10-4-4L4 16v4zM13 7l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
                             </svg>
                         </button>
+                        ${isCurrentDevice ? "" : `
                         <button type="button" class="remove-device-btn" data-id="${device.id}" aria-label="Remove ${device.name}">
                             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
                                 <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
                             </svg>
                         </button>
+                        `}
                     </div>
                 </div>
 
@@ -592,7 +624,8 @@ function renderDevices() {
                 </div>
             </div>
         </div>
-    `).join("");
+    `;
+    }).join("");
 
     deviceListEl.querySelectorAll(".rename-device-btn").forEach(btn => {
         btn.addEventListener("click", async event => {
@@ -1158,6 +1191,7 @@ document.addEventListener("keydown", async event => {
 addDeviceBtnEl?.addEventListener("click", async () => {
     deviceConnectModalEl.classList.remove("hidden");
     deviceConnectModalEl.setAttribute("aria-hidden", "false");
+    startDeviceRefresh();
 
     state.currentAccessCode = "";
     deviceAccessCodeEl.textContent = "------";
@@ -1167,7 +1201,14 @@ addDeviceBtnEl?.addEventListener("click", async () => {
     try {
         const { stashId, stashKeyBytes, token } = getStashContext();
 
-        const { code, expiresIn } = await apiCreateAccessCode(stashId, token);
+        const ua = navigator.userAgent || "";
+        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
+        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
+
+        const { code, expiresIn } = await apiCreateAccessCode(stashId, token, {
+            name: deviceName,
+            type: deviceType,
+        });
 
         const salt = crypto.getRandomValues(new Uint8Array(32));
         const wrapKey = await deriveWrappingKey(code, salt);
@@ -1202,10 +1243,16 @@ addDeviceBtnEl?.addEventListener("click", async () => {
 });
 
 document.querySelectorAll("[data-close-modal]").forEach(btn => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
         const modal = document.getElementById(btn.dataset.closeModal);
         modal.classList.add("hidden");
         modal.setAttribute("aria-hidden", "true");
+
+        if (btn.dataset.closeModal === "deviceConnectModal") {
+            stopDeviceRefresh();
+            await loadDevices();
+            renderDevices();
+        }
     });
 });
 
@@ -1266,7 +1313,9 @@ confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
         localStorage.removeItem(STORAGE_KEYS.stashId);
         localStorage.removeItem(STORAGE_KEYS.stashKey);
         localStorage.removeItem(STORAGE_KEYS.sessionToken);
+        localStorage.removeItem(STORAGE_KEYS.deviceId);
         window.location.replace("/");
+
         return;
     }
 

@@ -44,7 +44,7 @@ type AccessCode = {
 const app = new Hono();
 
 const challenges = new Map<string, { nonce: string, expiresAt: number }>();
-const sessions = new Map<string, { stashId: string, expiresAt: number }>();
+const sessions = new Map<string, { stashId: string, deviceId: string, expiresAt: number }>();
 const accessCodes = new Map<string, AccessCode>();
 
 const QUOTA = 500 * 1024 * 1024;
@@ -54,18 +54,29 @@ if (!existsSync(join("./stashes", "registry.json"))) {
     await writeFile(join("./stashes", "registry.json"), JSON.stringify({ stashes: {} }, null, 4));
 }
 
-function auth(c: Context, id: string) {
+function getSession(c: Context, id: string) {
     const token = c.req.header("Authorization")?.slice(7);
     const session = sessions.get(token ?? "");
-    return session && session.stashId === id && Date.now() <= session.expiresAt;
+    if (!session) return null;
+    if (session.stashId !== id) return null;
+    if (Date.now() > session.expiresAt) return null;
+    return session;
+}
+
+function auth(c: Context, id: string) {
+    return !!getSession(c, id);
 }
 
 app.post("/stash", async c => {
-    const { id, authVerifier, recoveryId, recovery } = await c.req.json<{
+    const { id, authVerifier, recoveryId, recovery, device } = await c.req.json<{
         id: string,
         authVerifier: string,
         recoveryId: string,
-        recovery: { salt: string, kdfParams: object, iv: string, encryptedKey: string }
+        recovery: { salt: string, kdfParams: object, iv: string, encryptedKey: string },
+        device?: {
+            name: string,
+            type: "desktop" | "mobile" | "tablet" | "server"
+        }
     }>();
 
     if (!id || !authVerifier || !recoveryId || !recovery) return c.json({ error: "Missing required fields" }, 400);
@@ -79,9 +90,18 @@ app.post("/stash", async c => {
     reg.stashes[id] = { id, authVerifier, recoveryId, quotaUsed: 0, createdAt: Date.now() };
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
-    await writeFile(join("./stashes", id, "devices.json"), JSON.stringify({ devices: [] }, null, 4));
+    const firstDevice: Device = {
+        id: "dev-" + randomBytes(8).toString("hex"),
+        name: device?.name?.trim() || "This device",
+        type: device?.type || "desktop",
+        addedAt: Date.now(),
+        lastSeenAt: Date.now(),
+        lastSeenLabel: "Last seen just now",
+    };
 
-    return c.json({ ok: true }, 201);
+    await writeFile(join("./stashes", id, "devices.json"), JSON.stringify({ devices: [firstDevice] }, null, 4));
+
+    return c.json({ ok: true, device: firstDevice }, 201);
 });
 
 app.get("/stash/:id/challenge", async c => {
@@ -108,18 +128,36 @@ app.post("/stash/:id/auth", async c => {
         return c.json({ error: "No active challenge" }, 400);
     }
 
-    const { response } = await c.req.json<{ response: string }>();
+    const { response, deviceId } = await c.req.json<{ response: string, deviceId?: string }>();
     const expected = createHmac("sha256", Buffer.from(reg.stashes[id].authVerifier, "base64")).update(challenge.nonce).digest("hex");
 
     if (!timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(response, "hex"))) {
         return c.json({ error: "Invalid auth response" }, 401);
     }
 
+    const path = join("./stashes", id, "devices.json");
+    const data = existsSync(path)
+        ? JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] }
+        : { devices: [] };
+
+    const currentDevice = data.devices.find(device => device.id === deviceId);
+    if (!currentDevice) {
+        return c.json({ error: "Unknown device" }, 401);
+    }
+
+    currentDevice.lastSeenAt = Date.now();
+    currentDevice.lastSeenLabel = "Last seen just now";
+    await writeFile(path, JSON.stringify(data, null, 4));
+
     challenges.delete(id);
     const token = randomBytes(32).toString("hex");
-    sessions.set(token, { stashId: id, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+    sessions.set(token, {
+        stashId: id,
+        deviceId: currentDevice.id,
+        expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+    });
 
-    return c.json({ token });
+    return c.json({ token, deviceId: currentDevice.id });
 });
 
 app.get("/stash/:id/recovery", async c => {
@@ -245,7 +283,8 @@ app.delete("/stash/:id/blobs", async c => {
 app.get("/stash/:id/devices", async c => {
     const id = c.req.param("id");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    const session = getSession(c, id);
+    if (!session) return c.json({ error: "Unauthorized" }, 401);
 
     const path = join("./stashes", id, "devices.json");
 
@@ -254,7 +293,7 @@ app.get("/stash/:id/devices", async c => {
     }
 
     const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
-    return c.json(data);
+    return c.json({ devices: data.devices, currentDeviceId: session.deviceId });
 });
 
 app.post("/stash/:id/devices", async c => {
@@ -327,7 +366,8 @@ app.delete("/stash/:id/devices/:deviceId", async c => {
     const id = c.req.param("id");
     const deviceId = c.req.param("deviceId");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    const session = getSession(c, id);
+    if (!session) return c.json({ error: "Unauthorized" }, 401);
 
     const path = join("./stashes", id, "devices.json");
 
@@ -336,8 +376,16 @@ app.delete("/stash/:id/devices/:deviceId", async c => {
     }
 
     const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
-    const before = data.devices.length;
 
+    if (deviceId === session.deviceId) {
+        return c.json({ error: "You cannot remove the current device" }, 400);
+    }
+
+    if (data.devices.length <= 1) {
+        return c.json({ error: "Cannot remove the last device" }, 400);
+    }
+
+    const before = data.devices.length;
     data.devices = data.devices.filter(device => device.id !== deviceId);
 
     if (data.devices.length === before) {
@@ -431,6 +479,8 @@ app.post("/stash/join/:token", async c => {
             ? body.deviceType
             : undefined);
 
+    let joinedDevice: Device | null = null;
+
     if (resolvedName && resolvedType) {
         const path = join("./stashes", stashId, "devices.json");
 
@@ -440,19 +490,20 @@ app.post("/stash/join/:token", async c => {
 
         const data = JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] };
 
-        data.devices.unshift({
+        joinedDevice = {
             id: "dev-" + randomBytes(8).toString("hex"),
             name: resolvedName,
             type: resolvedType,
             addedAt: Date.now(),
             lastSeenAt: Date.now(),
             lastSeenLabel: "Last seen just now",
-        });
+        };
 
+        data.devices.unshift(joinedDevice);
         await writeFile(path, JSON.stringify(data, null, 4));
     }
 
-    return c.json({ stashId, transfer });
+    return c.json({ stashId, transfer, device: joinedDevice });
 });
 
 app.use("/*", serveStatic({ root: "./frontend" }));

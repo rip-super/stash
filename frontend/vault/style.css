@@ -1691,6 +1691,23 @@ body::-webkit-scrollbar-corner,
     font-size: 0.85rem;
 }
 
+.device-self-pill {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0.5rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    color: var(--text-soft);
+    background: rgba(139, 126, 200, 0.12);
+    border: 1px solid rgba(139, 126, 200, 0.22);
+}
+
+.device-row.is-current-device {
+    border-color: rgba(139, 126, 200, 0.28);
+}
+
 @keyframes grainShift {
     0% {
         background-position: 0 0, 0 0, 0 0, 0 0, 0 0;

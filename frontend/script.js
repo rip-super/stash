@@ -83,12 +83,23 @@ async function createStash() {
         const phraseBytes = await phraseToBytes(phrase);
         const recoveryId = await deriveRecoveryId(phraseBytes);
 
-        await apiCreateStash({
+        const ua = navigator.userAgent || "";
+        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
+        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
+
+        const { device } = await apiCreateStash({
             id: stashId,
             authVerifier,
             recoveryId,
             recovery: { salt: toBase64(salt), kdfParams: { iterations: 200_000, hash: "SHA-256" }, iv, encryptedKey },
+            device: { name: deviceName, type: deviceType },
         });
+
+        localStorage.setItem(STORAGE_KEYS.stashId, stashId);
+        localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(stashKeyBytes));
+        if (device?.id) {
+            localStorage.setItem(STORAGE_KEYS.deviceId, device.id);
+        }
 
         localStorage.setItem(STORAGE_KEYS.stashId, stashId);
         localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(stashKeyBytes));
@@ -147,7 +158,7 @@ async function joinByCode(code, options = {}) {
     const normalizedCode = code.trim().toUpperCase();
 
     try {
-        const { stashId, transfer } = await apiJoinByCode(normalizedCode, {
+        const { stashId, transfer, device } = await apiJoinByCode(normalizedCode, {
             secret: options.secret,
             deviceName: options.deviceName,
             deviceType: options.deviceType,
@@ -159,6 +170,10 @@ async function joinByCode(code, options = {}) {
 
         localStorage.setItem(STORAGE_KEYS.stashId, stashId);
         localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(stashKeyBytes));
+        if (device?.id) {
+            localStorage.setItem(STORAGE_KEYS.deviceId, device.id);
+        }
+
 
         await authenticate(stashId, stashKeyBytes);
         closeModal();
@@ -182,6 +197,7 @@ async function recoveryByPhrase(phrase) {
 
         localStorage.setItem(STORAGE_KEYS.stashId, recovery.stashId);
         localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(resolvedKeyBytes));
+        localStorage.removeItem(STORAGE_KEYS.deviceId);
 
         await authenticate(recovery.stashId, resolvedKeyBytes);
         closeModal();
