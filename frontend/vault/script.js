@@ -1076,9 +1076,12 @@ async function downloadSelected() {
             continue;
         }
 
-        const rootFolder = zip.folder(selected.name);
+        const isSingleFolder = selectedItems.length === 1 && selectedItems[0].type === "folder";
 
-        const stack = [{ node: selected, folder: rootFolder }];
+        const stack = [{
+            node: selected,
+            folder: isSingleFolder ? zip : zip.folder(selected.name)
+        }];
 
         while (stack.length) {
             const { node, folder } = stack.pop();
