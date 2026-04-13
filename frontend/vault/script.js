@@ -59,6 +59,7 @@ const deleteStashModalEl = document.getElementById("deleteStashModal");
 const deleteStashBtnEl = document.getElementById("deleteStashBtn");
 const confirmDeleteStashBtnEl = document.getElementById("confirmDeleteStashBtn");
 const selectionPreviewEl = document.getElementById("selectionPreview");
+const sendViaFilesBtnEl = document.getElementById("sendViaFilesBtn");
 
 // #endregion
 
@@ -748,6 +749,11 @@ function renderSelection() {
     const ext = dotIndex > -1 ? item.name.slice(dotIndex + 1).toLowerCase() : "";
 
     let previewKind = null;
+    const CODE_EXTS = new Set([
+        "txt", "md", "js", "ts", "jsx", "tsx", "json", "json5",
+        "css", "scss", "html", "xml", "yml", "yaml", "log",
+        "py", "sh", "bash", "env", "toml", "ini", "cfg"
+    ]);
 
     if (mime.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext)) {
         previewKind = "image";
@@ -757,7 +763,7 @@ function renderSelection() {
         previewKind = "audio";
     } else if (mime === "application/pdf" || ext === "pdf") {
         previewKind = "pdf";
-    } else if (mime.startsWith("text/") || ["txt", "md", "js", "ts", "json", "css", "html", "xml", "yml", "yaml", "log"].includes(ext)) {
+    } else if (mime.startsWith("text/") || CODE_EXTS.has(ext)) {
         previewKind = "text";
     }
 
@@ -1263,6 +1269,91 @@ async function downloadSelected() {
 
     URL.revokeObjectURL(url);
     toast.hide();
+}
+
+async function sendViaFiles() {
+    const selected = getSelectedItem();
+    if (!selected) return;
+
+    const { stashId, stashKeyBytes, token } = getStashContext();
+    const toast = showToast("Decrypting files...");
+    const filesToSend = [];
+
+    try {
+        if (selected.type === "file") {
+            const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
+            const decrypted = await decryptBlob(buffer, stashKeyBytes);
+            filesToSend.push({
+                name: selected.name,
+                type: selected.mimeType || "",
+                buffer: decrypted
+            });
+        } else {
+            async function collect(node) {
+                for (const child of node.children || []) {
+                    if (child.type === "file") {
+                        const buffer = await apiDownloadBlob(stashId, token, child.blobId);
+                        const decrypted = await decryptBlob(buffer, stashKeyBytes);
+                        filesToSend.push({
+                            name: child.name,
+                            type: child.mimeType || "",
+                            buffer: decrypted
+                        });
+                    } else if (child.type === "folder") {
+                        await collect(child);
+                    }
+                }
+            }
+            await collect(selected);
+        }
+
+        toast.hide();
+
+        const filesWin = window.open("https://files.sahildash.dev", "_blank");
+        if (!filesWin) {
+            const t = showToast("Popup blocked - allow popups and try again.");
+            setTimeout(() => t.hide(), 3000);
+            return;
+        }
+
+        console.log("opened files window", filesWin);
+
+        let pingInterval = null;
+        let pingTimeout = null;
+
+        const onReady = (event) => {
+            if (event.origin !== "https://files.sahildash.dev") return;
+            if (event.data?.type !== "stash:ready") return;
+            console.log("stash got message:", event.origin, event.data);
+            clearInterval(pingInterval);
+            clearTimeout(pingTimeout);
+            window.removeEventListener("message", onReady);
+            filesWin.postMessage(
+                { type: "stash:files", files: filesToSend },
+                "https://files.sahildash.dev",
+                filesToSend.map(f => f.buffer)
+            );
+        };
+
+        window.addEventListener("message", onReady);
+
+        pingInterval = setInterval(() => {
+            console.log("sending ping");
+            try { filesWin.postMessage({ type: "stash:ping" }, "https://files.sahildash.dev"); } catch (e) { console.error("ping failed", e); }
+        }, 300);
+
+        pingTimeout = setTimeout(() => {
+            clearInterval(pingInterval);
+            window.removeEventListener("message", onReady);
+            const t = showToast("Could not reach files.sahildash.dev.");
+            setTimeout(() => t.hide(), 2500);
+        }, 15000);
+
+    } catch (err) {
+        toast.hide();
+        const t = showToast("Failed to prepare files.");
+        setTimeout(() => t.hide(), 2500);
+    }
 }
 
 // #endregion
@@ -1789,6 +1880,8 @@ document.getElementById("confirmDeleteStashBtn").addEventListener("click", async
     localStorage.removeItem(STORAGE_KEYS.deviceId);
     window.location.replace("/");
 });
+
+sendViaFilesBtnEl?.addEventListener("click", sendViaFiles);
 
 // #endregion
 

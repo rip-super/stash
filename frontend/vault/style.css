@@ -1278,6 +1278,10 @@ body::-webkit-scrollbar-corner,
     animation-delay: 0.14s;
 }
 
+.selection-actions .modal-btn:nth-child(4) {
+    animation-delay: 0.18s;
+}
+
 .modal-btn {
     width: 100%;
     padding: 0.85rem 0.9rem;
