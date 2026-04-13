@@ -1841,6 +1841,113 @@ body::-webkit-scrollbar-corner,
     background: rgba(255, 255, 255, 0.02);
 }
 
+.selection-card {
+    width: 100%;
+    height: 100%;
+    background: rgba(16, 15, 24, 0.92);
+    border: 1px solid var(--panel-border);
+    border-radius: 1.4rem;
+    padding: 1.2rem;
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(10px);
+    position: relative;
+    overflow: hidden;
+
+    display: flex;
+    flex-direction: column;
+    gap: 0.95rem;
+}
+
+.selection-name {
+    font-size: 1.45rem;
+    margin-bottom: 0.15rem;
+    word-break: break-word;
+    padding-right: 3rem;
+    flex-shrink: 0;
+}
+
+.selection-meta {
+    margin-bottom: 0.35rem;
+    flex-shrink: 0;
+}
+
+.selection-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    flex-shrink: 0;
+}
+
+.selection-preview {
+    min-height: 0;
+    flex: 1;
+    border: 1px solid rgba(139, 126, 200, 0.18);
+    border-radius: 1rem;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)),
+        rgba(10, 10, 14, 0.68);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.selection-preview.hidden {
+    display: none;
+}
+
+.selection-preview-inner {
+    width: 100%;
+    height: 100%;
+    padding: 0.8rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.selection-preview img,
+.selection-preview video,
+.selection-preview audio,
+.selection-preview iframe,
+.selection-preview pre {
+    max-width: 100%;
+}
+
+.selection-preview img,
+.selection-preview video,
+.selection-preview iframe {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 0.8rem;
+    background: rgba(0, 0, 0, 0.22);
+}
+
+.selection-preview audio {
+    width: 100%;
+}
+
+.selection-preview pre {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    margin: 0;
+    padding: 1rem;
+    border-radius: 0.8rem;
+    background: rgba(0, 0, 0, 0.18);
+    color: var(--text-soft);
+    font: 0.88rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.selection-preview-empty {
+    padding: 1rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.92rem;
+}
+
 @keyframes grainShift {
     0% {
         background-position: 0 0, 0 0, 0 0, 0 0, 0 0;

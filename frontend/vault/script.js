@@ -20,6 +20,8 @@ const state = {
     pendingDeviceDeleteId: null,
     renamingDeviceId: null,
     currentAccessCode: "",
+    previewObjectUrl: null,
+    previewRequestToken: 0,
 };
 
 // #endregion
@@ -56,6 +58,7 @@ const deviceDeleteCopyEl = document.getElementById("deviceDeleteCopy");
 const deleteStashModalEl = document.getElementById("deleteStashModal");
 const deleteStashBtnEl = document.getElementById("deleteStashBtn");
 const confirmDeleteStashBtnEl = document.getElementById("confirmDeleteStashBtn");
+const selectionPreviewEl = document.getElementById("selectionPreview");
 
 // #endregion
 
@@ -240,6 +243,29 @@ function getSelectedItems() {
 function clearSelection() {
     state.selectedItemIds = [];
     state.lastSelectedItemId = null;
+}
+
+function clearSelectionPreview() {
+    state.previewRequestToken++;
+
+    if (state.previewObjectUrl) {
+        URL.revokeObjectURL(state.previewObjectUrl);
+        state.previewObjectUrl = null;
+    }
+
+    if (selectionPreviewEl) {
+        selectionPreviewEl.innerHTML = "";
+        selectionPreviewEl.classList.add("hidden");
+    }
+}
+
+function escapeHtml(value = "") {
+    return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
 }
 
 // #endregion
@@ -652,6 +678,8 @@ function renderSelection() {
     const renameBtn = document.getElementById("renameBtn");
 
     if (!selectedItems.length) {
+        clearSelectionPreview();
+
         if (selectionPanelEl.classList.contains("hidden") || selectionPanelEl.classList.contains("closing")) {
             renameBtn.disabled = true;
             renameBtn.setAttribute("aria-disabled", "true");
@@ -670,18 +698,10 @@ function renderSelection() {
         return;
     }
 
-    if (selectedItems.length === 1) {
-        const item = selectedItems[0];
+    selectionPanelEl.classList.remove("hidden", "closing");
+    requestAnimationFrame(() => selectionPanelEl.classList.add("open"));
 
-        selectionLabelEl.textContent = item.type === "folder" ? "selected folder" : "selected file";
-        selectionNameEl.textContent = item.name;
-        selectionMetaEl.innerHTML = item.type === "folder"
-            ? `<span class="subtle">${item.children?.length || 0} item${(item.children?.length || 0) === 1 ? "" : "s"}</span>`
-            : `<span class="subtle">${item.size || "-"} • ${item.modified || "Unknown date"}</span>`;
-
-        renameBtn.disabled = false;
-        renameBtn.setAttribute("aria-disabled", "false");
-    } else {
+    if (selectedItems.length > 1) {
         const fileCount = selectedItems.filter(item => item.type === "file").length;
         const folderCount = selectedItems.filter(item => item.type === "folder").length;
 
@@ -703,10 +723,142 @@ function renderSelection() {
 
         renameBtn.disabled = true;
         renameBtn.setAttribute("aria-disabled", "true");
+        clearSelectionPreview();
+        return;
     }
 
-    selectionPanelEl.classList.remove("hidden", "closing");
-    requestAnimationFrame(() => selectionPanelEl.classList.add("open"));
+    const item = selectedItems[0];
+
+    selectionLabelEl.textContent = item.type === "folder" ? "selected folder" : "selected file";
+    selectionNameEl.textContent = item.name;
+    selectionMetaEl.innerHTML = item.type === "folder"
+        ? `<span class="subtle">${item.children?.length || 0} item${(item.children?.length || 0) === 1 ? "" : "s"}</span>`
+        : `<span class="subtle">${item.size || "-"} • ${item.modified || "Unknown date"}</span>`;
+
+    renameBtn.disabled = false;
+    renameBtn.setAttribute("aria-disabled", "false");
+
+    if (item.type !== "file" || item.pending || item.error || !item.blobId) {
+        clearSelectionPreview();
+        return;
+    }
+
+    const mime = (item.mimeType || "").toLowerCase();
+    const dotIndex = item.name.lastIndexOf(".");
+    const ext = dotIndex > -1 ? item.name.slice(dotIndex + 1).toLowerCase() : "";
+
+    let previewKind = null;
+
+    if (mime.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext)) {
+        previewKind = "image";
+    } else if (mime.startsWith("video/") || ["mp4", "webm", "mov", "m4v", "ogv"].includes(ext)) {
+        previewKind = "video";
+    } else if (mime.startsWith("audio/") || ["mp3", "wav", "ogg", "m4a", "flac", "aac"].includes(ext)) {
+        previewKind = "audio";
+    } else if (mime === "application/pdf" || ext === "pdf") {
+        previewKind = "pdf";
+    } else if (mime.startsWith("text/") || ["txt", "md", "js", "ts", "json", "css", "html", "xml", "yml", "yaml", "log"].includes(ext)) {
+        previewKind = "text";
+    }
+
+    if (!previewKind) {
+        clearSelectionPreview();
+        return;
+    }
+
+    clearSelectionPreview();
+    selectionPreviewEl.classList.remove("hidden");
+    selectionPreviewEl.innerHTML = `
+        <div class="selection-preview-inner">
+            <div class="selection-preview-empty">Loading preview...</div>
+        </div>
+    `;
+
+    const requestToken = ++state.previewRequestToken;
+
+    (async () => {
+        try {
+            const { stashId, stashKeyBytes, token } = getStashContext();
+            const buffer = await apiDownloadBlob(stashId, token, item.blobId);
+            const decrypted = await decryptBlob(buffer, stashKeyBytes);
+
+            if (requestToken !== state.previewRequestToken) return;
+
+            if (previewKind === "text") {
+                const text = new TextDecoder().decode(decrypted.slice(0, 64 * 1024));
+                selectionPreviewEl.innerHTML = `
+                    <div class="selection-preview-inner">
+                        <pre>${escapeHtml(text)}</pre>
+                    </div>
+                `;
+                return;
+            }
+
+            let blob;
+
+            if (item.mimeType) {
+                blob = new Blob([decrypted], { type: item.mimeType });
+            } else if (previewKind === "image") {
+                blob = new Blob([decrypted], { type: "image/*" });
+            } else if (previewKind === "video") {
+                blob = new Blob([decrypted], { type: "video/mp4" });
+            } else if (previewKind === "audio") {
+                blob = new Blob([decrypted], { type: "audio/*" });
+            } else if (previewKind === "pdf") {
+                blob = new Blob([decrypted], { type: "application/pdf" });
+            } else {
+                blob = new Blob([decrypted]);
+            }
+
+            const url = URL.createObjectURL(blob);
+            state.previewObjectUrl = url;
+
+            if (previewKind === "image") {
+                selectionPreviewEl.innerHTML = `
+                    <div class="selection-preview-inner">
+                        <img src="${url}" alt="${escapeHtml(item.name)} preview" loading="lazy" />
+                    </div>
+                `;
+                return;
+            }
+
+            if (previewKind === "video") {
+                selectionPreviewEl.innerHTML = `
+                    <div class="selection-preview-inner">
+                        <video src="${url}" controls muted preload="metadata" playsinline></video>
+                    </div>
+                `;
+                return;
+            }
+
+            if (previewKind === "audio") {
+                selectionPreviewEl.innerHTML = `
+                    <div class="selection-preview-inner">
+                        <audio src="${url}" controls preload="metadata"></audio>
+                    </div>
+                `;
+                return;
+            }
+
+            if (previewKind === "pdf") {
+                selectionPreviewEl.innerHTML = `
+                    <div class="selection-preview-inner">
+                        <iframe src="${url}" title="${escapeHtml(item.name)} preview"></iframe>
+                    </div>
+                `;
+                return;
+            }
+        } catch (error) {
+            if (requestToken !== state.previewRequestToken) return;
+
+            console.error("Preview failed:", error);
+            selectionPreviewEl.innerHTML = `
+                <div class="selection-preview-inner">
+                    <div class="selection-preview-empty">Preview unavailable.</div>
+                </div>
+            `;
+        }
+    })();
 }
 
 function renderDevices() {
@@ -883,6 +1035,7 @@ async function uploadOneFile(file, folder) {
         size: "...",
         modified: now,
         blobId: null,
+        mimeType: file.type || "",
         pending: true
     };
 
@@ -1316,6 +1469,7 @@ document.getElementById("renameBtn").addEventListener("click", startInlineRename
 document.getElementById("downloadBtn").addEventListener("click", downloadSelected);
 
 closeSelectionBtnEl.addEventListener("click", () => {
+    clearSelectionPreview();
     clearSelection();
     listBodyEl.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
     renderSelection();
