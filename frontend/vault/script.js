@@ -7,9 +7,10 @@ const state = {
     path: [],
     history: [[]],
     historyIndex: 0,
-    selectedItemId: null,
+    selectedItemIds: [],
+    lastSelectedItemId: null,
     dragActive: false,
-    draggedItemId: null,
+    draggedItemIds: [],
     folderDropTargetId: null,
     parentDropActive: false,
     searchQuery: "",
@@ -100,8 +101,8 @@ function findNodeAndParentById(id, node = vaultData, parent = null) {
 }
 
 function getSelectedItem() {
-    if (!state.selectedItemId) return null;
-    return findNodeAndParentById(state.selectedItemId)?.node || null;
+    if (state.selectedItemIds.length !== 1) return null;
+    return findNodeAndParentById(state.selectedItemIds[0])?.node || null;
 }
 
 function fuzzyMatch(text, query) {
@@ -230,6 +231,17 @@ function closeModal(modal) {
     modal.addEventListener("transitionend", finish, { once: true });
 }
 
+function getSelectedItems() {
+    return state.selectedItemIds
+        .map(id => findNodeAndParentById(id)?.node)
+        .filter(Boolean);
+}
+
+function clearSelection() {
+    state.selectedItemIds = [];
+    state.lastSelectedItemId = null;
+}
+
 // #endregion
 
 // #region Icons
@@ -342,8 +354,6 @@ async function navigateToCrumb(index) {
 
 // #region Rendering
 
-function clearSelection() { state.selectedItemId = null; }
-
 function renderBreadcrumbs() {
     const trail = [{ id: "root", name: "Home", root: true }];
     let node = vaultData;
@@ -440,8 +450,8 @@ async function renderList() {
         return `<button
             type="button"
             class="list-row
-                ${state.selectedItemId === item.id ? "selected" : ""}
-                ${state.draggedItemId === item.id ? "dragging" : ""}
+                ${state.selectedItemIds.includes(item.id) ? "selected" : ""}
+                ${state.draggedItemIds.includes(item.id) ? "dragging" : ""}
                 ${state.folderDropTargetId === item.id ? "drop-target" : ""}
                 ${isRenaming ? "renaming" : ""}
                 ${isNew ? "new-item" : ""}"
@@ -514,10 +524,34 @@ async function renderList() {
     listBodyEl.querySelectorAll(".list-row").forEach(row => {
         const { id, type } = row.dataset;
 
-        row.addEventListener("click", () => {
+        row.addEventListener("click", event => {
             if (state.renamingItemId === id) return;
-            state.selectedItemId = id;
-            listBodyEl.querySelectorAll(".list-row").forEach(r => r.classList.toggle("selected", r.dataset.id === id));
+
+            const visibleRows = Array.from(listBodyEl.querySelectorAll(".list-row"));
+            const visibleIds = visibleRows.map(entry => entry.dataset.id);
+
+            if (event.shiftKey && state.lastSelectedItemId && visibleIds.includes(state.lastSelectedItemId)) {
+                const start = visibleIds.indexOf(state.lastSelectedItemId);
+                const end = visibleIds.indexOf(id);
+                const [from, to] = start < end ? [start, end] : [end, start];
+                state.selectedItemIds = visibleIds.slice(from, to + 1);
+            } else if (event.metaKey || event.ctrlKey) {
+                if (state.selectedItemIds.includes(id)) {
+                    state.selectedItemIds = state.selectedItemIds.filter(selectedId => selectedId !== id);
+                    state.lastSelectedItemId = state.selectedItemIds[state.selectedItemIds.length - 1] || null;
+                } else {
+                    state.selectedItemIds = [...state.selectedItemIds, id];
+                    state.lastSelectedItemId = id;
+                }
+            } else {
+                state.selectedItemIds = [id];
+                state.lastSelectedItemId = id;
+            }
+
+            listBodyEl.querySelectorAll(".list-row").forEach(r => {
+                r.classList.toggle("selected", state.selectedItemIds.includes(r.dataset.id));
+            });
+
             renderSelection();
         });
 
@@ -527,16 +561,36 @@ async function renderList() {
         });
 
         row.addEventListener("dragstart", event => {
-            if (state.renamingItemId) { event.preventDefault(); return; }
-            state.draggedItemId = id;
+            if (state.renamingItemId) {
+                event.preventDefault();
+                return;
+            }
+
+            if (!state.selectedItemIds.includes(id)) {
+                state.selectedItemIds = [id];
+                state.lastSelectedItemId = id;
+                listBodyEl.querySelectorAll(".list-row").forEach(r => {
+                    r.classList.toggle("selected", r.dataset.id === id);
+                });
+                renderSelection();
+            }
+
+            state.draggedItemIds = [...state.selectedItemIds];
             state.folderDropTargetId = null;
             state.parentDropActive = false;
+
             event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", id);
+            event.dataTransfer.setData("text/plain", state.draggedItemIds.join(","));
 
             const ghost = document.createElement("div");
             ghost.className = "drag-ghost";
-            ghost.innerHTML = `${itemIcon(type)}<span>${row.querySelector(".row-name")?.textContent || ""}</span>`;
+
+            if (state.draggedItemIds.length === 1) {
+                ghost.innerHTML = `${itemIcon(type)}<span>${row.querySelector(".row-name")?.textContent || ""}</span>`;
+            } else {
+                ghost.innerHTML = `${itemIcon("folder")}<span>${state.draggedItemIds.length} items</span>`;
+            }
+
             document.body.appendChild(ghost);
             event.dataTransfer.setDragImage(ghost, 20, 20);
             requestAnimationFrame(() => ghost.remove());
@@ -546,7 +600,7 @@ async function renderList() {
         });
 
         row.addEventListener("dragend", async () => {
-            state.draggedItemId = null;
+            state.draggedItemIds = [];
             state.folderDropTargetId = null;
             state.parentDropActive = false;
             setDragMoveMode(false);
@@ -556,8 +610,21 @@ async function renderList() {
 
         if (type === "folder") {
             row.addEventListener("dragover", event => {
-                if (!state.draggedItemId || state.draggedItemId === id) return;
-                if (!canMoveItem(state.draggedItemId, id)) return;
+                if (!state.draggedItemIds.length) return;
+                if (state.draggedItemIds.includes(id)) return;
+
+                let canMove = false;
+
+                for (const draggedId of state.draggedItemIds) {
+                    if (!canMoveItem(draggedId, id)) {
+                        canMove = false;
+                        break;
+                    }
+                    canMove = true;
+                }
+
+                if (!canMove) return;
+
                 event.preventDefault();
                 state.folderDropTargetId = id;
                 row.classList.add("drop-target");
@@ -574,17 +641,22 @@ async function renderList() {
                 event.preventDefault();
                 row.classList.remove("drop-target");
                 state.folderDropTargetId = null;
-                await moveItemToFolder(state.draggedItemId, id);
+                await moveItemToFolder(id);
             });
         }
     });
 }
 
 function renderSelection() {
-    const item = getSelectedItem();
+    const selectedItems = getSelectedItems();
+    const renameBtn = document.getElementById("renameBtn");
 
-    if (!item) {
-        if (selectionPanelEl.classList.contains("hidden")) return;
+    if (!selectedItems.length) {
+        if (selectionPanelEl.classList.contains("hidden") || selectionPanelEl.classList.contains("closing")) {
+            renameBtn.disabled = true;
+            renameBtn.setAttribute("aria-disabled", "true");
+            return;
+        }
 
         selectionPanelEl.classList.remove("open");
         selectionPanelEl.classList.add("closing");
@@ -593,17 +665,48 @@ function renderSelection() {
             selectionPanelEl.classList.remove("closing");
         }, { once: true });
 
+        renameBtn.disabled = true;
+        renameBtn.setAttribute("aria-disabled", "true");
         return;
     }
 
-    selectionLabelEl.textContent = item.type === "folder" ? "selected folder" : "selected file";
-    selectionNameEl.textContent = item.name;
-    selectionMetaEl.innerHTML = item.type === "folder"
-        ? `<span>folder</span><span class="bullet">&#9679;</span><span>${item.modified}</span>`
-        : `<span>${item.size}</span><span class="bullet">&#9679;</span><span>${item.modified}</span>`;
+    if (selectedItems.length === 1) {
+        const item = selectedItems[0];
+
+        selectionLabelEl.textContent = item.type === "folder" ? "selected folder" : "selected file";
+        selectionNameEl.textContent = item.name;
+        selectionMetaEl.innerHTML = item.type === "folder"
+            ? `<span class="subtle">${item.children?.length || 0} item${(item.children?.length || 0) === 1 ? "" : "s"}</span>`
+            : `<span class="subtle">${item.size || "-"} • ${item.modified || "Unknown date"}</span>`;
+
+        renameBtn.disabled = false;
+        renameBtn.setAttribute("aria-disabled", "false");
+    } else {
+        const fileCount = selectedItems.filter(item => item.type === "file").length;
+        const folderCount = selectedItems.filter(item => item.type === "folder").length;
+
+        selectionLabelEl.textContent = "selected items";
+
+        if (fileCount && folderCount) {
+            selectionNameEl.textContent = `${selectedItems.length} items`;
+        } else if (fileCount) {
+            selectionNameEl.textContent = `${fileCount} file${fileCount === 1 ? "" : "s"}`;
+        } else {
+            selectionNameEl.textContent = `${folderCount} folder${folderCount === 1 ? "" : "s"}`;
+        }
+
+        selectionMetaEl.innerHTML = `
+            <span class="subtle">
+                ${fileCount} file${fileCount === 1 ? "" : "s"} • ${folderCount} folder${folderCount === 1 ? "" : "s"}
+            </span>
+        `;
+
+        renameBtn.disabled = true;
+        renameBtn.setAttribute("aria-disabled", "true");
+    }
 
     selectionPanelEl.classList.remove("hidden", "closing");
-    selectionPanelEl.classList.add("open");
+    requestAnimationFrame(() => selectionPanelEl.classList.add("open"));
 }
 
 function renderDevices() {
@@ -838,44 +941,74 @@ async function addFolder() {
     };
 
     currentFolder.children.unshift(newFolder);
-    state.selectedItemId = newFolder.id;
+    state.selectedItemIds = [newFolder.id];
+    state.lastSelectedItemId = newFolder.id;
     state.newItemIds.add(newFolder.id);
     state.renamingItemId = newFolder.id;
     await render();
 }
 
 async function deleteSelected() {
-    const selected = getSelectedItem();
-    if (!selected || selected.id === "root") return;
+    const selectedItems = getSelectedItems().filter(item => item.id !== "root");
+    if (!selectedItems.length) return;
 
     const { stashId, token } = getStashContext();
-    const found = findNodeAndParentById(selected.id);
-    if (!found?.parent?.children) return;
+    const currentFolder = getCurrentFolder();
+    const idsToDelete = new Set(selectedItems.map(item => item.id));
+    const originalChildren = [...(currentFolder.children || [])];
 
-    function collectBlobIds(node) {
-        const ids = [];
-        if (node.blobId) ids.push(node.blobId);
-        for (const child of node.children || []) ids.push(...collectBlobIds(child));
-        return ids;
+    const rowsToDelete = Array.from(listBodyEl.querySelectorAll(".list-row"))
+        .filter(row => idsToDelete.has(row.dataset.id));
+
+    if (rowsToDelete.length) {
+        await Promise.all(rowsToDelete.map(row => new Promise(resolve => {
+            let done = false;
+
+            const finish = () => {
+                if (done) return;
+                done = true;
+                resolve();
+            };
+
+            row.classList.add("exiting");
+            row.addEventListener("transitionend", finish, { once: true });
+            row.addEventListener("animationend", finish, { once: true });
+            setTimeout(finish, 400);
+        })));
     }
 
-    const rowEl = listBodyEl.querySelector(`[data-id="${selected.id}"]`);
-    const removedIndex = found.parent.children.findIndex(item => item.id === selected.id);
-    const removedItem = found.node;
+    const removed = [];
+    currentFolder.children = originalChildren.filter(item => {
+        if (idsToDelete.has(item.id)) {
+            removed.push(item);
+            return false;
+        }
+        return true;
+    });
 
-    if (rowEl) {
-        await new Promise(resolve => {
-            rowEl.classList.add("exiting");
-            rowEl.addEventListener("animationend", resolve, { once: true });
-        });
-    }
-
-    found.parent.children = found.parent.children.filter(item => item.id !== selected.id);
     clearSelection();
     await render();
 
     try {
-        const blobIds = collectBlobIds(removedItem);
+        const blobIds = [];
+
+        for (const item of removed) {
+            const stack = [item];
+
+            while (stack.length) {
+                const node = stack.pop();
+
+                if (node.type === "file" && node.blobId) {
+                    blobIds.push(node.blobId);
+                }
+
+                if (node.type === "folder" && node.children?.length) {
+                    for (const child of node.children) {
+                        stack.push(child);
+                    }
+                }
+            }
+        }
 
         if (blobIds.length) {
             await apiFetch(`/stash/${stashId}/blobs`, {
@@ -888,12 +1021,15 @@ async function deleteSelected() {
         await saveMetadata();
     } catch (error) {
         console.error("Delete failed:", error);
+        currentFolder.children = originalChildren;
 
-        found.parent.children.splice(removedIndex, 0, removedItem);
-        state.newItemIds.add(removedItem.id);
+        for (const item of removed) {
+            state.newItemIds.add(item.id);
+        }
+
         await render();
 
-        const toast = showToast(`${removedItem.type === "folder" ? "Folder" : "File"} deleting failed. Try again later.`);
+        const toast = showToast("Deleting failed. Try again later.");
         setTimeout(() => toast.hide(), 2200);
     } finally {
         await loadAndRenderQuota();
@@ -901,20 +1037,22 @@ async function deleteSelected() {
 }
 
 async function startInlineRename() {
-    const selected = getSelectedItem();
-    if (!selected || selected.id === "root") return;
+    const selectedItems = getSelectedItems();
+    if (selectedItems.length !== 1) return;
+    if (selectedItems[0].id === "root") return;
 
-    state.renamingItemId = selected.id;
+    state.renamingItemId = selectedItems[0].id;
     await renderList();
 }
 
 async function downloadSelected() {
-    const selected = getSelectedItem();
-    if (!selected) return;
+    const selectedItems = getSelectedItems();
+    if (!selectedItems.length) return;
 
     const { stashId, stashKeyBytes, token } = getStashContext();
 
-    if (selected.type === "file") {
+    if (selectedItems.length === 1 && selectedItems[0].type === "file") {
+        const selected = selectedItems[0];
         const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
         const decrypted = await decryptBlob(buffer, stashKeyBytes);
         const url = URL.createObjectURL(new Blob([decrypted]));
@@ -928,33 +1066,46 @@ async function downloadSelected() {
         return;
     }
 
-    showToast("Downloading! This might take while for large uploads...");
-
+    const toast = showToast("Downloading! This might take while for large uploads...");
     const zip = new window.JSZip();
 
-    async function addToZip(node, folder) {
-        for (const child of node.children || []) {
-            if (child.type === "file") {
-                const buffer = await apiDownloadBlob(stashId, token, child.blobId);
-                folder.file(child.name, await decryptBlob(buffer, stashKeyBytes));
-            } else if (child.type === "folder") {
-                await addToZip(child, folder.folder(child.name));
+    for (const selected of selectedItems) {
+        if (selected.type === "file") {
+            const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
+            zip.file(selected.name, await decryptBlob(buffer, stashKeyBytes));
+            continue;
+        }
+
+        const rootFolder = zip.folder(selected.name);
+
+        const stack = [{ node: selected, folder: rootFolder }];
+
+        while (stack.length) {
+            const { node, folder } = stack.pop();
+
+            for (const child of node.children || []) {
+                if (child.type === "file") {
+                    const buffer = await apiDownloadBlob(stashId, token, child.blobId);
+                    folder.file(child.name, await decryptBlob(buffer, stashKeyBytes));
+                } else if (child.type === "folder") {
+                    const childFolder = folder.folder(child.name);
+                    stack.push({ node: child, folder: childFolder });
+                }
             }
         }
     }
-
-    await addToZip(selected, zip.folder(selected.name));
 
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
 
     a.href = url;
-    a.download = `${selected.name}.zip`;
+    a.download = selectedItems.length === 1 && selectedItems[0].type === "folder"
+        ? `${selectedItems[0].name}.zip`
+        : "selection.zip";
     a.click();
 
     URL.revokeObjectURL(url);
-
     toast.hide();
 }
 
@@ -963,7 +1114,7 @@ async function downloadSelected() {
 // #region Drag and Drop
 
 function setDropActive(active) {
-    if (state.draggedItemId) return;
+    if (state.draggedItemIds.length) return;
     state.dragActive = active;
     dropzoneEl.classList.toggle("drag-active", active);
     dropOverlayEl.setAttribute("aria-hidden", active ? "false" : "true");
@@ -1002,22 +1153,71 @@ function canMoveItem(sourceId, targetFolderId) {
     return true;
 }
 
-async function moveItemToFolder(sourceId, targetFolderId) {
-    if (!canMoveItem(sourceId, targetFolderId)) {
-        state.draggedItemId = null;
+async function moveItemToFolder(targetFolderId) {
+    if (!state.draggedItemIds.length) {
         setDragMoveMode(false);
         await render();
         return;
     }
 
-    const sf = findNodeAndParentById(sourceId);
-    const tf = findNodeAndParentById(targetFolderId);
-    if (!sf?.parent?.children || !tf?.node?.children) return;
+    const targetFolder = findNodeAndParentById(targetFolderId)?.node;
+    if (!targetFolder || targetFolder.type !== "folder") {
+        state.draggedItemIds = [];
+        setDragMoveMode(false);
+        await render();
+        return;
+    }
 
-    sf.parent.children = sf.parent.children.filter(i => i.id !== sourceId);
-    tf.node.children.unshift(sf.node);
+    const draggedItems = state.draggedItemIds
+        .map(id => findNodeAndParentById(id))
+        .filter(Boolean)
+        .sort((a, b) => {
+            const aIndex = a.parent?.children?.findIndex(item => item.id === a.node.id) ?? -1;
+            const bIndex = b.parent?.children?.findIndex(item => item.id === b.node.id) ?? -1;
+            return aIndex - bIndex;
+        });
 
-    state.draggedItemId = null;
+    for (const found of draggedItems) {
+        if (!canMoveItem(found.node.id, targetFolderId)) {
+            const toast = showToast("Move failed.");
+            setTimeout(() => toast.hide(), 1800);
+
+            state.draggedItemIds = [];
+            state.folderDropTargetId = null;
+            setDragMoveMode(false);
+            await render();
+            return;
+        }
+    }
+
+    const existingNames = new Set((targetFolder.children || []).map(item => item.name));
+    const incomingNames = new Set();
+
+    for (const found of draggedItems) {
+        if (existingNames.has(found.node.name) || incomingNames.has(found.node.name)) {
+            const toast = showToast("Move failed. A file or folder with that name already exists.");
+            setTimeout(() => toast.hide(), 2200);
+
+            state.draggedItemIds = [];
+            state.folderDropTargetId = null;
+            setDragMoveMode(false);
+            await render();
+            return;
+        }
+
+        incomingNames.add(found.node.name);
+    }
+
+    const movedNodes = [];
+
+    for (const found of draggedItems) {
+        found.parent.children = found.parent.children.filter(item => item.id !== found.node.id);
+        movedNodes.push(found.node);
+    }
+
+    targetFolder.children.unshift(...movedNodes);
+
+    state.draggedItemIds = [];
     state.folderDropTargetId = null;
 
     setDragMoveMode(false);
@@ -1025,14 +1225,8 @@ async function moveItemToFolder(sourceId, targetFolderId) {
     await render();
 }
 
-async function moveItemToParentFolder(sourceId) {
-    if (!sourceId || state.path.length === 0) return;
-
-    const sourceFound = findNodeAndParentById(sourceId);
-    if (!sourceFound?.parent) return;
-
-    const currentFolderId = state.path[state.path.length - 1];
-    if (sourceFound.parent.id !== currentFolderId) return;
+async function moveItemToParentFolder() {
+    if (!state.draggedItemIds.length || state.path.length === 0) return;
 
     let targetParent = vaultData;
 
@@ -1043,13 +1237,62 @@ async function moveItemToParentFolder(sourceId) {
         targetParent = found.node;
     }
 
-    if (targetParent.id === sourceId) return;
-    if (isDescendantFolder(sourceId, targetParent.id)) return;
+    const currentFolderId = state.path[state.path.length - 1];
 
-    sourceFound.parent.children = sourceFound.parent.children.filter(item => item.id !== sourceId);
-    targetParent.children.unshift(sourceFound.node);
+    const draggedItems = state.draggedItemIds
+        .map(id => findNodeAndParentById(id))
+        .filter(found => found?.parent?.id === currentFolderId)
+        .sort((a, b) => {
+            const aIndex = a.parent?.children?.findIndex(item => item.id === a.node.id) ?? -1;
+            const bIndex = b.parent?.children?.findIndex(item => item.id === b.node.id) ?? -1;
+            return aIndex - bIndex;
+        });
 
-    state.draggedItemId = null;
+    for (const found of draggedItems) {
+        if (targetParent.id === found.node.id || isDescendantFolder(found.node.id, targetParent.id)) {
+            const toast = showToast("Move failed.");
+            setTimeout(() => toast.hide(), 1800);
+
+            state.draggedItemIds = [];
+            state.folderDropTargetId = null;
+            state.parentDropActive = false;
+            parentDropzoneEl.classList.remove("active");
+            setDragMoveMode(false);
+            await render();
+            return;
+        }
+    }
+
+    const existingNames = new Set((targetParent.children || []).map(item => item.name));
+    const incomingNames = new Set();
+
+    for (const found of draggedItems) {
+        if (existingNames.has(found.node.name) || incomingNames.has(found.node.name)) {
+            const toast = showToast("Move failed. A file or folder with that name already exists.");
+            setTimeout(() => toast.hide(), 2200);
+
+            state.draggedItemIds = [];
+            state.folderDropTargetId = null;
+            state.parentDropActive = false;
+            parentDropzoneEl.classList.remove("active");
+            setDragMoveMode(false);
+            await render();
+            return;
+        }
+
+        incomingNames.add(found.node.name);
+    }
+
+    const movedNodes = [];
+
+    for (const found of draggedItems) {
+        found.parent.children = found.parent.children.filter(item => item.id !== found.node.id);
+        movedNodes.push(found.node);
+    }
+
+    targetParent.children.unshift(...movedNodes);
+
+    state.draggedItemIds = [];
     state.folderDropTargetId = null;
     state.parentDropActive = false;
     parentDropzoneEl.classList.remove("active");
@@ -1085,16 +1328,25 @@ fileInputEl.addEventListener("change", event => {
 
 document.addEventListener("dragover", event => {
     event.preventDefault();
-    if (!state.draggedItemId) setDropActive(true);
+
+    if (state.draggedItemIds.length) return;
+
+    const hasFiles = Array.from(event.dataTransfer?.types || []).includes("Files");
+    setDropActive(hasFiles);
 });
 
 document.addEventListener("dragenter", event => {
     event.preventDefault();
-    if (!state.draggedItemId) setDropActive(true);
+
+    if (state.draggedItemIds.length) return;
+
+    const hasFiles = Array.from(event.dataTransfer?.types || []).includes("Files");
+    if (hasFiles) setDropActive(true);
 });
 
 document.addEventListener("dragleave", event => {
-    if (state.draggedItemId) return;
+    if (state.draggedItemIds.length) return;
+
     if (
         !event.relatedTarget ||
         event.clientX <= 0 || event.clientY <= 0 ||
@@ -1105,7 +1357,7 @@ document.addEventListener("dragleave", event => {
 });
 
 document.addEventListener("drop", async event => {
-    if (state.draggedItemId) return;
+    if (state.draggedItemIds.length) return;
 
     event.preventDefault();
     setDropActive(false);
@@ -1184,29 +1436,55 @@ document.addEventListener("drop", async event => {
     }
 });
 
+document.addEventListener("mouseleave", () => {
+    if (!state.draggedItemIds.length) setDropActive(false);
+});
+
+dropzoneEl.addEventListener("click", event => {
+    if (event.target.closest(".list-row")) return;
+    if (event.target.closest(".selection-card")) return;
+    if (event.target.closest(".parent-dropzone")) return;
+
+    clearSelection();
+    listBodyEl.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
+    renderSelection();
+});
+
+listStateEl.addEventListener("click", event => {
+    if (event.target.closest(".list-row")) return;
+
+    clearSelection();
+    listBodyEl.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
+    renderSelection();
+});
+
 parentDropzoneEl.addEventListener("dragover", event => {
-    if (!state.draggedItemId || state.path.length === 0) return;
+    if (!state.draggedItemIds.length || state.path.length === 0) return;
     event.preventDefault();
     state.parentDropActive = true;
     parentDropzoneEl.classList.add("active");
 });
 
-parentDropzoneEl.addEventListener("dragleave", () => {
-    state.parentDropActive = false;
-    parentDropzoneEl.classList.remove("active");
+parentDropzoneEl.addEventListener("dragleave", event => {
+    if (!parentDropzoneEl.contains(event.relatedTarget)) {
+        state.parentDropActive = false;
+        parentDropzoneEl.classList.remove("active");
+    }
 });
 
 parentDropzoneEl.addEventListener("drop", async event => {
     event.preventDefault();
+    state.parentDropActive = false;
     parentDropzoneEl.classList.remove("active");
-    await moveItemToParentFolder(state.draggedItemId);
+    await moveItemToParentFolder();
 });
 
 window.addEventListener("blur", async () => {
     setDropActive(false);
 
-    if (!state.draggedItemId) return;
+    if (!state.draggedItemIds.length) return;
 
+    state.draggedItemIds = [];
     state.folderDropTargetId = null;
     state.parentDropActive = false;
     parentDropzoneEl.classList.remove("active");
@@ -1214,24 +1492,29 @@ window.addEventListener("blur", async () => {
     await renderList();
 });
 
-document.addEventListener("mouseleave", () => {
-    if (!state.draggedItemId) setDropActive(false);
-});
-
 vaultSearchEl.addEventListener("input", async event => {
     state.searchQuery = event.target.value;
     clearSelection();
     await renderList();
+    renderSelection();
 });
 
 document.addEventListener("keydown", async event => {
     if (event.key === "Escape" && state.renamingItemId) {
         state.renamingItemId = null;
         await renderList();
+        return;
     }
 
-    if (event.key === "F2" && state.selectedItemId && !state.renamingItemId) {
+    if (event.key === "F2" && state.selectedItemIds.length === 1 && !state.renamingItemId) {
+        event.preventDefault();
         await startInlineRename();
+        return;
+    }
+
+    if (event.key === "Delete" && state.selectedItemIds.length && !state.renamingItemId) {
+        event.preventDefault();
+        await deleteSelected();
     }
 });
 

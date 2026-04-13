@@ -1826,6 +1826,21 @@ body::-webkit-scrollbar-corner,
     box-shadow: none;
 }
 
+.selection-actions .modal-btn:disabled,
+.selection-actions .modal-btn[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    border-color: rgba(139, 126, 200, 0.14);
+    background: rgba(255, 255, 255, 0.02);
+    box-shadow: none;
+}
+
+.selection-actions .modal-btn:disabled:hover,
+.selection-actions .modal-btn[aria-disabled="true"]:hover {
+    border-color: rgba(139, 126, 200, 0.14);
+    background: rgba(255, 255, 255, 0.02);
+}
+
 @keyframes grainShift {
     0% {
         background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
