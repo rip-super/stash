@@ -284,8 +284,13 @@ async function apiPutMetadata(stashId, token, buffer) {
     });
 }
 
-async function apiStartBlobUpload(stashId, token) {
-    const res = await apiFetch(`/stash/${stashId}/blob/start`, { method: "POST", token });
+async function apiStartBlobUpload(stashId, token, payload = {}) {
+    const res = await apiFetch(`/stash/${stashId}/blob/start`, {
+        method: "POST",
+        token,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
     return res.json();
 }
 

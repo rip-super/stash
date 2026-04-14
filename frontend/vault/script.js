@@ -27,6 +27,16 @@ const state = {
 };
 
 const FILE_CACHE_MAX_BYTES = 300 * 1024 * 1024;
+const ZSTD_MIN_SIZE = 32 * 1024;
+const ZSTD_MIN_SAVINGS = 0.9;
+
+const ZSTD_SKIP_EXTS = new Set([
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg",
+    "mp4", "webm", "mov", "m4v", "ogv",
+    "mp3", "wav", "ogg", "m4a", "flac", "aac",
+    "zip", "rar", "7z", "gz", "bz2", "xz", "zst",
+    "pdf"
+]);
 
 // #endregion
 
@@ -148,6 +158,45 @@ function getVisibleItems(items) {
 
     walk(getCurrentFolder());
     return results;
+}
+
+function getVaultFileTotals(node = vaultData) {
+    let originalBytes = 0;
+    let storedBytes = 0;
+    let fileCount = 0;
+
+    function walk(current) {
+        for (const child of current.children || []) {
+            if (child.type === "file") {
+                fileCount++;
+                originalBytes += child.originalSize || child.rawSize || 0;
+                storedBytes += child.storedSize || child.rawSize || 0;
+            } else if (child.type === "folder") {
+                walk(child);
+            }
+        }
+    }
+
+    walk(node);
+
+    return {
+        fileCount,
+        originalBytes,
+        storedBytes,
+    };
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${Math.max(1, Math.round(kb))} KB`;
+
+    const mb = kb / 1024;
+    if (mb < 1024) return `${mb.toFixed(1)} MB`;
+
+    const gb = mb / 1024;
+    return `${gb.toFixed(1)} GB`;
 }
 
 function showToast(message) {
@@ -380,8 +429,14 @@ async function getCachedDecryptedBlob(item, {
                 return null;
             }
 
-            cached.buffer = decrypted;
-            cached.size = decrypted.byteLength;
+            const decoded = decodeStoredFile(item, decrypted);
+
+            if (allowAbort && isStillWanted && !isStillWanted()) {
+                return null;
+            }
+
+            cached.buffer = decoded;
+            cached.size = decoded.byteLength;
             cached.lastAccessed = Date.now();
             cached.pending = null;
 
@@ -404,6 +459,76 @@ async function getCachedDecryptedBlob(item, {
 
     cached.lastAccessed = Date.now();
     return cached;
+}
+
+function getFileExtension(name = "") {
+    const dotIndex = name.lastIndexOf(".");
+    return dotIndex > -1 ? name.slice(dotIndex + 1).toLowerCase() : "";
+}
+
+function shouldTryZstd(file) {
+    if (!window.Zstd) return false;
+    if (!file || file.size < ZSTD_MIN_SIZE) return false;
+
+    const ext = getFileExtension(file.name);
+    if (ZSTD_SKIP_EXTS.has(ext)) return false;
+
+    return true;
+}
+
+async function maybeCompressForUpload(file) {
+    const originalBuffer = await file.arrayBuffer();
+
+    if (!shouldTryZstd(file)) {
+        return {
+            uploadBuffer: originalBuffer,
+            compression: "none",
+            originalSize: originalBuffer.byteLength,
+            storedSize: originalBuffer.byteLength,
+        };
+    }
+
+    try {
+        const compressed = window.Zstd.compress(new Uint8Array(originalBuffer));
+        const compressedBuffer = compressed.buffer.slice(
+            compressed.byteOffset,
+            compressed.byteOffset + compressed.byteLength
+        );
+
+        if (compressed.byteLength < originalBuffer.byteLength * ZSTD_MIN_SAVINGS) {
+            return {
+                uploadBuffer: compressedBuffer,
+                compression: "zstd",
+                originalSize: originalBuffer.byteLength,
+                storedSize: compressed.byteLength,
+            };
+        }
+    } catch (error) {
+        console.warn("Zstd compression failed, falling back to original bytes:", error);
+    }
+
+    return {
+        uploadBuffer: originalBuffer,
+        compression: "none",
+        originalSize: originalBuffer.byteLength,
+        storedSize: originalBuffer.byteLength,
+    };
+}
+
+function decodeStoredFile(item, decryptedBuffer) {
+    if (!item || item.compression !== "zstd") {
+        return decryptedBuffer;
+    }
+
+    if (!window.Zstd) {
+        throw new Error("Zstd is not loaded");
+    }
+
+    const decompressed = window.Zstd.decompress(new Uint8Array(decryptedBuffer));
+    return decompressed.buffer.slice(
+        decompressed.byteOffset,
+        decompressed.byteOffset + decompressed.byteLength
+    );
 }
 
 // #endregion
@@ -871,7 +996,7 @@ function renderSelection() {
     selectionNameEl.textContent = item.name;
     selectionMetaEl.innerHTML = item.type === "folder"
         ? `<span class="subtle">${item.children?.length || 0} item${(item.children?.length || 0) === 1 ? "" : "s"}</span>`
-        : `<span class="subtle">${item.size || "-"} • ${item.modified || "Unknown date"}</span>`;
+        : `<span class="subtle">${item.size || "-"} • ${item.modified || "Unknown date"}${item.compression === "zstd" ? " • compressed" : ""}</span>`;
 
     renameBtn.disabled = false;
     renameBtn.setAttribute("aria-disabled", "false");
@@ -1166,15 +1291,17 @@ async function loadAndRenderQuota() {
     const quotaValueEl = document.getElementById("quotaValue");
 
     try {
-        const { used, limit } = await apiGetQuota(stashId, token);
-        const pct = Math.min((used / limit) * 100, 100);
-        const usedMB = (used / 1024 / 1024).toFixed(1);
-        const limitMB = Math.round(limit / 1024 / 1024);
+        const { limit } = await apiGetQuota(stashId, token);
+        const { originalBytes } = getVaultFileTotals();
+
+        const pct = Math.min((originalBytes / limit) * 100, 100);
 
         quotaFillEl.style.width = pct + "%";
         quotaFillEl.classList.toggle("warn", pct >= 70 && pct < 90);
         quotaFillEl.classList.toggle("crit", pct >= 90);
-        quotaValueEl.textContent = `${usedMB} / ${limitMB} MB`;
+
+        quotaValueEl.textContent =
+            `${formatBytes(originalBytes)} / ${formatBytes(limit)}`;
     } catch {
         quotaValueEl.textContent = "unavailable";
     }
@@ -1186,13 +1313,25 @@ async function loadAndRenderQuota() {
 
 async function uploadOneFile(file, folder) {
     const { stashId, stashKeyBytes, token } = getStashContext();
-    const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const now = new Date().toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+    });
 
     const newItem = {
         id: "file-" + crypto.randomUUID(),
         name: getUniqueChildName(folder, file.name),
-        type: "file", size: "...", modified: now,
-        blobId: null, mimeType: file.type || "", pending: true, rawSize: file.size,
+        type: "file",
+        size: "...",
+        modified: now,
+        blobId: null,
+        mimeType: file.type || "",
+        pending: true,
+        rawSize: file.size,
+        originalSize: file.size,
+        storedSize: file.size,
+        compression: "none",
     };
 
     folder.children.unshift(newItem);
@@ -1201,38 +1340,64 @@ async function uploadOneFile(file, folder) {
     await renderList();
 
     try {
-        const chunkCount = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+        const prepared = await maybeCompressForUpload(file);
+
+        newItem.originalSize = prepared.originalSize;
+        newItem.storedSize = prepared.storedSize;
+        newItem.rawSize = prepared.originalSize;
+        newItem.compression = prepared.compression;
+
+        const chunkCount = Math.max(1, Math.ceil(prepared.uploadBuffer.byteLength / CHUNK_SIZE));
         const totalServerChunks = chunkCount + 1;
         let doneChunks = 0;
 
-        const { blobId } = await apiStartBlobUpload(stashId, token);
+        const { blobId } = await apiStartBlobUpload(stashId, token, {
+            originalSize: prepared.originalSize,
+        });
+
         const CONCURRENCY = 5;
         const inFlight = [];
 
-        await encryptBlob(await file.arrayBuffer(), stashKeyBytes, null, async (index, buffer) => {
-            inFlight.push(
-                apiUploadChunk(stashId, token, blobId, index, buffer).then(() => {
-                    doneChunks++;
-                    updateRowProgress(newItem.id, `uploading ${Math.round((doneChunks / totalServerChunks) * 100)}%`);
-                })
-            );
-            if (inFlight.length > CONCURRENCY) await inFlight.shift();
+        await encryptBlob(prepared.uploadBuffer, stashKeyBytes, null, async (index, buffer) => {
+            const p = apiUploadChunk(stashId, token, blobId, index, buffer).then(() => {
+                doneChunks++;
+                updateRowProgress(
+                    newItem.id,
+                    `uploading ${Math.round((doneChunks / totalServerChunks) * 100)}%`
+                );
+            });
+
+            inFlight.push(p);
+
+            if (inFlight.length > CONCURRENCY) {
+                await inFlight.shift();
+            }
         });
 
         await Promise.all(inFlight);
-        const { blobId: confirmedId } = await apiCompleteBlobUpload(stashId, token, blobId, totalServerChunks);
+
+        const { blobId: confirmedId } = await apiCompleteBlobUpload(
+            stashId,
+            token,
+            blobId,
+            totalServerChunks
+        );
 
         const kb = Math.max(1, Math.round(file.size / 1024));
         newItem.blobId = confirmedId;
         newItem.size = kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB";
         newItem.pending = false;
+        newItem.error = false;
+
         await saveMetadata();
         await loadAndRenderQuota();
     } catch (err) {
-        newItem.pending = false;
-        newItem.error = true;
+        folder.children = (folder.children || []).filter(item => item.id !== newItem.id);
+
         const toast = showToast(`Upload failed: ${err.message}`);
         setTimeout(() => toast.hide(), 3500);
+
+        await loadAndRenderQuota();
     }
 
     await renderList();
@@ -1246,7 +1411,6 @@ async function upload(files, targetFolder = getCurrentFolder()) {
             await uploadOneFile(file, targetFolder);
         }
 
-        await saveMetadata();
         clearSelection();
         setDropActive(false);
         await render();

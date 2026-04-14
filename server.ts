@@ -11,8 +11,10 @@ import { pipeline } from "stream/promises";
 interface StashRecord {
     id: string;
     authVerifier: string;
-    recoveryId: string,
-    quotaUsed: number;
+    recoveryId: string;
+    logicalQuotaUsed: number;
+    storedQuotaUsed: number;
+    pendingLogicalQuota?: number;
     createdAt: number;
 }
 
@@ -43,6 +45,13 @@ type AccessCode = {
     };
 };
 
+interface BlobIndexEntry {
+    originalSize: number;
+    storedSize: number;
+}
+
+type BlobIndex = Record<string, BlobIndexEntry>;
+
 const app = new Hono();
 
 const challenges = new Map<string, { nonce: string, expiresAt: number }>();
@@ -58,9 +67,9 @@ const MAX_TOTAL_STORAGE = 50 * 1024 * 1024 * 1024;
 const TEMP_UPLOAD_TTL_MS = 60 * 60 * 1000;
 const TEMP_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 
-await mkdir("./stashes", { recursive: true });
-if (!existsSync(join("./stashes", "registry.json"))) {
-    await writeFile(join("./stashes", "registry.json"), JSON.stringify({ stashes: {} }, null, 4));
+await mkdir(STASHES_ROOT, { recursive: true });
+if (!existsSync(REGISTRY_PATH)) {
+    await writeFile(REGISTRY_PATH, JSON.stringify({ stashes: {} }, null, 4));
 }
 
 await cleanupExpiredTempUploads().catch(error => {
@@ -104,12 +113,16 @@ async function getDirectorySize(path: string): Promise<number> {
 async function cleanupExpiredTempUploads() {
     if (!existsSync(STASHES_ROOT)) return;
 
+    let reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    let regDirty = false;
+
     const stashEntries = await readdir(STASHES_ROOT, { withFileTypes: true });
 
     for (const stashEntry of stashEntries) {
         if (!stashEntry.isDirectory()) continue;
 
-        const tempRoot = join(STASHES_ROOT, stashEntry.name, "temp");
+        const stashId = stashEntry.name;
+        const tempRoot = join(STASHES_ROOT, stashId, "temp");
         if (!existsSync(tempRoot)) continue;
 
         const uploadEntries = await readdir(tempRoot, { withFileTypes: true });
@@ -121,13 +134,21 @@ async function cleanupExpiredTempUploads() {
             const sessionPath = join(uploadDir, "session.json");
 
             let createdAt = 0;
+            let reservedLogicalSize = 0;
 
             if (existsSync(sessionPath)) {
                 const session = await readFile(sessionPath, "utf-8")
-                    .then(text => JSON.parse(text) as { createdAt?: number })
+                    .then(text => JSON.parse(text) as {
+                        createdAt?: number;
+                        originalSize?: number;
+                        reservedLogicalSize?: number;
+                    })
                     .catch(() => null);
 
                 createdAt = session?.createdAt || 0;
+                reservedLogicalSize = Number(
+                    session?.reservedLogicalSize ?? session?.originalSize ?? 0
+                ) || 0;
             }
 
             if (!createdAt) {
@@ -136,10 +157,35 @@ async function cleanupExpiredTempUploads() {
             }
 
             if (createdAt && Date.now() - createdAt > TEMP_UPLOAD_TTL_MS) {
+                const stash = reg.stashes[stashId];
+
+                if (stash && reservedLogicalSize > 0) {
+                    stash.pendingLogicalQuota = Math.max(
+                        0,
+                        (stash.pendingLogicalQuota || 0) - reservedLogicalSize
+                    );
+                    regDirty = true;
+                }
+
                 await rm(uploadDir, { recursive: true, force: true });
             }
         }
     }
+
+    if (regDirty) {
+        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+    }
+}
+
+async function readBlobIndex(stashId: string): Promise<BlobIndex> {
+    const path = join(STASHES_ROOT, stashId, "blobs", "index.json");
+    if (!existsSync(path)) return {};
+    return JSON.parse(await readFile(path, "utf-8")) as BlobIndex;
+}
+
+async function writeBlobIndex(stashId: string, index: BlobIndex) {
+    const path = join(STASHES_ROOT, stashId, "blobs", "index.json");
+    await writeFile(path, JSON.stringify(index, null, 4));
 }
 
 app.post("/stash", async c => {
@@ -162,7 +208,16 @@ app.post("/stash", async c => {
     await mkdir(join("./stashes", id, "blobs"), { recursive: true });
     await writeFile(join("./stashes", id, "recovery.json"), JSON.stringify(recovery, null, 4));
 
-    reg.stashes[id] = { id, authVerifier, recoveryId, quotaUsed: 0, createdAt: Date.now() };
+    reg.stashes[id] = {
+        id,
+        authVerifier,
+        recoveryId,
+        logicalQuotaUsed: 0,
+        storedQuotaUsed: 0,
+        pendingLogicalQuota: 0,
+        createdAt: Date.now(),
+    };
+
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
 
     const firstDevice: Device = {
@@ -339,16 +394,52 @@ app.post("/stash/:id/blob/start", async c => {
     const id = c.req.param("id");
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    const body = await c.req.json().catch(() => ({})) as { originalSize?: number };
+    const originalSize = Number(body.originalSize);
+
+    if (!Number.isFinite(originalSize) || originalSize < 0) {
+        return c.json({ error: "Invalid originalSize" }, 400);
+    }
+
+    const pendingLogicalQuota = stash.pendingLogicalQuota || 0;
+
+    if (stash.logicalQuotaUsed + pendingLogicalQuota + originalSize > QUOTA) {
+        return c.json({ error: "Quota exceeded" }, 413);
+    }
+
     const totalUsed = await getDirectorySize(STASHES_ROOT);
     if (totalUsed >= MAX_TOTAL_STORAGE) {
         return c.json({ error: "Server storage is full" }, 507);
     }
 
+    stash.pendingLogicalQuota = pendingLogicalQuota + originalSize;
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+
     const blobId = randomBytes(16).toString("hex");
     const tempDir = join(STASHES_ROOT, id, "temp", blobId);
 
-    await mkdir(tempDir, { recursive: true });
-    await writeFile(join(tempDir, "session.json"), JSON.stringify({ createdAt: Date.now() }, null, 4));
+    try {
+        await mkdir(tempDir, { recursive: true });
+        await writeFile(
+            join(tempDir, "session.json"),
+            JSON.stringify({
+                createdAt: Date.now(),
+                originalSize,
+                reservedLogicalSize: originalSize,
+            }, null, 4)
+        );
+    } catch (error) {
+        stash.pendingLogicalQuota = Math.max(
+            0,
+            (stash.pendingLogicalQuota || 0) - originalSize
+        );
+        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+        throw error;
+    }
 
     return c.json({ blobId }, 201);
 });
@@ -364,57 +455,21 @@ app.put("/stash/:id/blob/:blobId/chunk/:index", async c => {
     const tempDir = join(STASHES_ROOT, id, "temp", blobId);
     if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
 
-    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
-    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
-
     const chunkPath = join(tempDir, String(index).padStart(6, "0"));
     const existingChunkSize = (await stat(chunkPath).catch(() => null))?.size || 0;
 
-    let tempSize = 0;
-    const tempEntries = await readdir(tempDir, { withFileTypes: true });
-
-    for (const entry of tempEntries) {
-        if (!entry.isFile()) continue;
-        if (entry.name === "session.json") continue;
-
-        const info = await stat(join(tempDir, entry.name)).catch(() => null);
-        tempSize += info?.size || 0;
-    }
-
     const contentLength = parseInt(c.req.header("Content-Length") || "0");
+    const totalUsed = await getDirectorySize(STASHES_ROOT);
+    const projectedTotalUsed = totalUsed + Math.max(0, contentLength - existingChunkSize);
 
-    if (contentLength > 0) {
-        const projectedTempSize = tempSize - existingChunkSize + contentLength;
-
-        if (reg.stashes[id].quotaUsed + projectedTempSize > QUOTA) {
-            return c.json({ error: "Quota exceeded" }, 413);
-        }
-
-        const totalUsed = await getDirectorySize(STASHES_ROOT);
-        const projectedTotalUsed = totalUsed + Math.max(0, contentLength - existingChunkSize);
-
-        if (projectedTotalUsed > MAX_TOTAL_STORAGE) {
-            return c.json({ error: "Server storage is full" }, 507);
-        }
+    if (projectedTotalUsed > MAX_TOTAL_STORAGE) {
+        return c.json({ error: "Server storage is full" }, 507);
     }
 
-    await pipeline(Readable.fromWeb(c.req.raw.body as any), createWriteStream(chunkPath));
-
-    tempSize = 0;
-    const finalTempEntries = await readdir(tempDir, { withFileTypes: true });
-
-    for (const entry of finalTempEntries) {
-        if (!entry.isFile()) continue;
-        if (entry.name === "session.json") continue;
-
-        const info = await stat(join(tempDir, entry.name)).catch(() => null);
-        tempSize += info?.size || 0;
-    }
-
-    if (reg.stashes[id].quotaUsed + tempSize > QUOTA) {
-        await unlink(chunkPath).catch(() => { });
-        return c.json({ error: "Quota exceeded" }, 413);
-    }
+    await pipeline(
+        Readable.fromWeb(c.req.raw.body as any),
+        createWriteStream(chunkPath)
+    );
 
     return c.json({ ok: true });
 });
@@ -434,26 +489,49 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
     if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
-    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
 
-    let tempSize = 0;
-    const tempEntries = await readdir(tempDir, { withFileTypes: true });
+    const session = await readFile(join(tempDir, "session.json"), "utf-8")
+        .then(text => JSON.parse(text) as {
+            createdAt?: number;
+            originalSize?: number;
+            reservedLogicalSize?: number;
+        })
+        .catch(() => null);
 
-    for (const entry of tempEntries) {
-        if (!entry.isFile()) continue;
-        if (entry.name === "session.json") continue;
+    const originalSize = Number(session?.originalSize);
+    const reservedLogicalSize = Number(
+        session?.reservedLogicalSize ?? session?.originalSize
+    );
 
-        const info = await stat(join(tempDir, entry.name)).catch(() => null);
-        tempSize += info?.size || 0;
+    if (!Number.isFinite(originalSize) || originalSize < 0) {
+        if (Number.isFinite(reservedLogicalSize) && reservedLogicalSize > 0) {
+            stash.pendingLogicalQuota = Math.max(
+                0,
+                (stash.pendingLogicalQuota || 0) - reservedLogicalSize
+            );
+            await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+        }
+
+        await rm(tempDir, { recursive: true, force: true });
+        return c.json({ error: "Missing originalSize" }, 400);
     }
 
-    if (reg.stashes[id].quotaUsed + tempSize > QUOTA) {
+    if (!Number.isFinite(reservedLogicalSize) || reservedLogicalSize < 0) {
+        stash.pendingLogicalQuota = Math.max(0, stash.pendingLogicalQuota || 0);
+        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
         await rm(tempDir, { recursive: true, force: true });
-        return c.json({ error: "Quota exceeded" }, 413);
+        return c.json({ error: "Invalid reservedLogicalSize" }, 400);
     }
 
     const totalUsed = await getDirectorySize(STASHES_ROOT);
     if (totalUsed > MAX_TOTAL_STORAGE) {
+        stash.pendingLogicalQuota = Math.max(
+            0,
+            (stash.pendingLogicalQuota || 0) - reservedLogicalSize
+        );
+        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
         await rm(tempDir, { recursive: true, force: true });
         return c.json({ error: "Server storage is full" }, 507);
     }
@@ -462,47 +540,62 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
     const dest = createWriteStream(blobPath);
 
     try {
-        for (let i = 0; i < chunkCount; i++) {
-            const chunkPath = join(tempDir, String(i).padStart(6, "0"));
-
-            if (!existsSync(chunkPath)) {
-                dest.destroy();
-                await unlink(blobPath).catch(() => { });
-                await rm(tempDir, { recursive: true, force: true });
-                return c.json({ error: `Missing chunk ${i}` }, 400);
-            }
-
-            await new Promise<void>((resolve, reject) => {
-                const src = createReadStream(chunkPath);
-
-                src.on("error", reject);
-                dest.on("error", reject);
-                src.on("end", resolve);
-
-                src.pipe(dest, { end: false });
-            });
-        }
-
         await new Promise<void>((resolve, reject) => {
-            dest.end((err: Error | null | undefined) => err ? reject(err) : resolve());
+            dest.once("error", reject);
+
+            (async () => {
+                for (let i = 0; i < chunkCount; i++) {
+                    const chunkPath = join(tempDir, String(i).padStart(6, "0"));
+
+                    if (!existsSync(chunkPath)) {
+                        throw new Error(`Missing chunk ${i}`);
+                    }
+
+                    await new Promise<void>((chunkResolve, chunkReject) => {
+                        const src = createReadStream(chunkPath);
+                        src.once("error", chunkReject);
+                        src.once("end", chunkResolve);
+                        src.pipe(dest, { end: false });
+                    });
+                }
+
+                dest.end((err: Error | null | undefined) => err ? reject(err) : resolve());
+            })().catch(reject);
         });
     } catch (error) {
         dest.destroy();
         await unlink(blobPath).catch(() => { });
+
+        stash.pendingLogicalQuota = Math.max(
+            0,
+            (stash.pendingLogicalQuota || 0) - reservedLogicalSize
+        );
+        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+
         await rm(tempDir, { recursive: true, force: true });
+
+        if (error instanceof Error && error.message.startsWith("Missing chunk ")) {
+            return c.json({ error: error.message }, 400);
+        }
+
         throw error;
     }
 
     await rm(tempDir, { recursive: true, force: true });
 
-    const { size } = await stat(blobPath);
+    const { size: storedSize } = await stat(blobPath);
 
-    if (reg.stashes[id].quotaUsed + size > QUOTA) {
-        await unlink(blobPath).catch(() => { });
-        return c.json({ error: "Quota exceeded" }, 413);
-    }
+    const blobIndex = await readBlobIndex(id);
+    blobIndex[blobId] = { originalSize, storedSize };
+    await writeBlobIndex(id, blobIndex);
 
-    reg.stashes[id].quotaUsed += size;
+    stash.pendingLogicalQuota = Math.max(
+        0,
+        (stash.pendingLogicalQuota || 0) - reservedLogicalSize
+    );
+    stash.logicalQuotaUsed += originalSize;
+    stash.storedQuotaUsed += storedSize;
+
     await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ blobId });
@@ -531,15 +624,24 @@ app.delete("/stash/:id/blob/:blobId", async c => {
 
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
-    const path = join("./stashes", id, "blobs", c.req.param("blobId"));
+    const blobId = c.req.param("blobId");
+    const path = join(STASHES_ROOT, id, "blobs", blobId);
     if (!existsSync(path)) return c.json({ error: "Blob not found" }, 404);
 
-    const { size } = await stat(path);
+    const blobIndex = await readBlobIndex(id);
+    const indexed = blobIndex[blobId];
+    const storedSize = indexed?.storedSize ?? (await stat(path)).size;
+    const originalSize = indexed?.originalSize ?? storedSize;
+
     await unlink(path);
 
-    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
-    reg.stashes[id].quotaUsed = Math.max(0, reg.stashes[id].quotaUsed - size);
-    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+    delete blobIndex[blobId];
+    await writeBlobIndex(id, blobIndex);
+
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    reg.stashes[id].logicalQuotaUsed = Math.max(0, reg.stashes[id].logicalQuotaUsed - originalSize);
+    reg.stashes[id].storedQuotaUsed = Math.max(0, reg.stashes[id].storedQuotaUsed - storedSize);
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
 });
@@ -555,20 +657,32 @@ app.delete("/stash/:id/blobs", async c => {
         return c.json({ error: "Invalid blobIds" }, 400);
     }
 
-    let freedBytes = 0;
+    const blobIndex = await readBlobIndex(id);
+
+    let freedOriginalBytes = 0;
+    let freedStoredBytes = 0;
 
     for (const blobId of blobIds) {
-        const path = join("./stashes", id, "blobs", blobId);
+        const path = join(STASHES_ROOT, id, "blobs", blobId);
         if (!existsSync(path)) continue;
 
-        const { size } = await stat(path);
+        const indexed = blobIndex[blobId];
+        const storedSize = indexed?.storedSize ?? (await stat(path)).size;
+        const originalSize = indexed?.originalSize ?? storedSize;
+
         await unlink(path);
-        freedBytes += size;
+        freedOriginalBytes += originalSize;
+        freedStoredBytes += storedSize;
+
+        delete blobIndex[blobId];
     }
 
-    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
-    reg.stashes[id].quotaUsed = Math.max(0, reg.stashes[id].quotaUsed - freedBytes);
-    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+    await writeBlobIndex(id, blobIndex);
+
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    reg.stashes[id].logicalQuotaUsed = Math.max(0, reg.stashes[id].logicalQuotaUsed - freedOriginalBytes);
+    reg.stashes[id].storedQuotaUsed = Math.max(0, reg.stashes[id].storedQuotaUsed - freedStoredBytes);
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
 });
@@ -655,7 +769,8 @@ app.patch("/stash/:id/devices/:deviceId", async c => {
     return c.json({ device });
 });
 
-app.delete("/stash/:id/devices/:deviceId", async c => {
+// ugly ahh syntax to make ts shutup abt types being too deep or whatever
+app.delete<"/stash/:id/devices/:deviceId">("/stash/:id/devices/:deviceId", async c => {
     const id = c.req.param("id");
     const deviceId = c.req.param("deviceId");
 
@@ -694,10 +809,10 @@ app.get("/stash/:id/quota", async c => {
 
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
-    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
     if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
 
-    return c.json({ used: reg.stashes[id].quotaUsed, limit: QUOTA });
+    return c.json({ used: reg.stashes[id].logicalQuotaUsed, limit: QUOTA });
 });
 
 app.post("/stash/:id/access-code", async c => {

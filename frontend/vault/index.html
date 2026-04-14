@@ -256,9 +256,11 @@
     <script type="module">
         import JSZip from "https://esm.sh/jszip";
         import QRCode from "https://esm.sh/qrcode";
+        import { Zstd } from "https://esm.sh/@hpcc-js/wasm-zstd";
 
         window.JSZip = JSZip;
         window.QRCode = QRCode;
+        window.Zstd = await Zstd.load();
     </script>
     <script src="/lib.js"></script>
     <script src="/vault/script.js"></script>
