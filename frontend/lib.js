@@ -131,6 +131,21 @@ async function authenticate(stashId, stashKeyBytes) {
 
 // #region Crypto
 
+const CHUNK_SIZE = 2 * 1024 * 1024;
+const BLOB_MAGIC = 0x53545348; // STSH
+
+let cachedFileKey = null;
+let cachedFileKeySource = null;
+
+async function getFileKey(stashKeyBytes) {
+    const source = localStorage.getItem(STORAGE_KEYS.stashKey);
+    if (cachedFileKey && cachedFileKeySource === source) return cachedFileKey;
+    cachedFileKey = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
+    cachedFileKeySource = source;
+
+    return cachedFileKey;
+}
+
 async function encryptWithKey(key, plaintext) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
@@ -148,24 +163,69 @@ async function decryptWithKey(key, buffer) {
 
 async function encryptMetadata(metadata, stashKeyBytes) {
     const key = await deriveSubKey(stashKeyBytes, "stash:metadata", ["encrypt", "decrypt"]);
-    const encoded = new TextEncoder().encode(JSON.stringify(metadata));
-    return encryptWithKey(key, encoded);
+    return encryptWithKey(key, new TextEncoder().encode(JSON.stringify(metadata)));
 }
 
 async function decryptMetadata(buffer, stashKeyBytes) {
     const key = await deriveSubKey(stashKeyBytes, "stash:metadata", ["encrypt", "decrypt"]);
-    const plaintext = await decryptWithKey(key, buffer);
-    return JSON.parse(new TextDecoder().decode(plaintext));
+    return JSON.parse(new TextDecoder().decode(await decryptWithKey(key, buffer)));
 }
 
-async function encryptBlob(fileBytes, stashKeyBytes) {
-    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
-    return encryptWithKey(key, fileBytes);
+async function encryptBlob(fileBytes, stashKeyBytes, onProgress, onChunk) {
+    const key = await getFileKey(stashKeyBytes);
+    const input = fileBytes instanceof ArrayBuffer ? new Uint8Array(fileBytes) : fileBytes;
+    const originalSize = input.byteLength;
+    const chunkCount = Math.max(1, Math.ceil(originalSize / CHUNK_SIZE));
+
+    const headerBuf = new ArrayBuffer(21);
+    const hv = new DataView(headerBuf);
+    hv.setUint32(0, BLOB_MAGIC);
+    hv.setUint8(4, 1);
+    hv.setUint32(5, CHUNK_SIZE);
+    hv.setUint32(9, chunkCount);
+    hv.setUint32(13, Math.floor(originalSize / 0x100000000));
+    hv.setUint32(17, originalSize >>> 0);
+
+    await onChunk?.(0, headerBuf);
+
+    for (let i = 0; i < chunkCount; i++) {
+        const chunk = input.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, originalSize));
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, chunk);
+        const out = new Uint8Array(12 + ct.byteLength);
+        out.set(iv);
+        out.set(new Uint8Array(ct), 12);
+        onProgress?.((i + 1) / chunkCount);
+        await onChunk?.(i + 1, out.buffer);
+    }
 }
 
-async function decryptBlob(buffer, stashKeyBytes) {
-    const key = await deriveSubKey(stashKeyBytes, "stash:files", ["encrypt", "decrypt"]);
-    return decryptWithKey(key, buffer);
+async function decryptBlob(buffer, stashKeyBytes, onProgress) {
+    const key = await getFileKey(stashKeyBytes);
+
+    const dv = new DataView(buffer);
+    const chunkSize = dv.getUint32(5);
+    const chunkCount = dv.getUint32(9);
+    const originalSize = dv.getUint32(13) * 0x100000000 + dv.getUint32(17);
+
+    const result = new Uint8Array(originalSize);
+    let readOff = 21, writeOff = 0;
+
+    for (let i = 0; i < chunkCount; i++) {
+        const isLast = i === chunkCount - 1;
+        const plainLen = isLast ? (originalSize - i * chunkSize) : chunkSize;
+        const iv = new Uint8Array(buffer, readOff, 12);
+
+        readOff += 12;
+        const ct = new Uint8Array(buffer, readOff, plainLen + 16);
+        readOff += plainLen + 16;
+        const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+        result.set(new Uint8Array(plain), writeOff);
+        writeOff += plain.byteLength;
+        onProgress?.((i + 1) / chunkCount);
+    }
+
+    return result.buffer;
 }
 
 // #endregion
@@ -224,19 +284,53 @@ async function apiPutMetadata(stashId, token, buffer) {
     });
 }
 
-async function apiUploadBlob(stashId, token, buffer) {
-    const res = await apiFetch(`/stash/${stashId}/blob`, {
-        method: "POST",
+async function apiStartBlobUpload(stashId, token) {
+    const res = await apiFetch(`/stash/${stashId}/blob/start`, { method: "POST", token });
+    return res.json();
+}
+
+async function apiUploadChunk(stashId, token, blobId, index, buffer) {
+    await apiFetch(`/stash/${stashId}/blob/${blobId}/chunk/${index}`, {
+        method: "PUT",
         token,
         headers: { "Content-Type": "application/octet-stream" },
         body: buffer,
     });
+}
+
+async function apiCompleteBlobUpload(stashId, token, blobId, chunkCount) {
+    const res = await apiFetch(`/stash/${stashId}/blob/${blobId}/complete`, {
+        method: "POST",
+        token,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chunkCount }),
+    });
     return res.json();
 }
 
-async function apiDownloadBlob(stashId, token, blobId) {
+async function apiDownloadBlob(stashId, token, blobId, onProgress) {
     const res = await apiFetch(`/stash/${stashId}/blob/${blobId}`, { token });
-    return res.arrayBuffer();
+    if (!onProgress) return res.arrayBuffer();
+
+    const contentLength = parseInt(res.headers.get("Content-Length") || "0");
+    if (!contentLength) return res.arrayBuffer();
+
+    const reader = res.body.getReader();
+    const chunks = [];
+    let received = 0;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.byteLength;
+        onProgress(received / contentLength);
+    }
+
+    const out = new Uint8Array(received);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+    return out.buffer;
 }
 
 async function apiJoinByCode(code, payload = {}) {

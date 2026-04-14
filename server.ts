@@ -1,11 +1,12 @@
 import { Hono, Context } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { readFile, writeFile, mkdir, stat, unlink, rm } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, createReadStream, createWriteStream } from "fs";
 import { join } from "path";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 interface StashRecord {
     id: string;
@@ -261,35 +262,100 @@ app.put("/stash/:id/metadata", async c => {
     return c.json({ ok: true });
 });
 
-app.post("/stash/:id/blob", bodyLimit({ maxSize: 510 * 1024 * 1024 }), async c => {
+app.post("/stash/:id/blob/start", async c => {
     const id = c.req.param("id");
-
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
-    const data = await c.req.arrayBuffer();
-    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
-    if (reg.stashes[id].quotaUsed + data.byteLength > QUOTA) {
-        return c.json({ error: "Quota exceeded" }, 413);
-    }
-
     const blobId = randomBytes(16).toString("hex");
-    await writeFile(join("./stashes", id, "blobs", blobId), Buffer.from(data));
-    reg.stashes[id].quotaUsed += data.byteLength;
-    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+    await mkdir(join("./stashes", id, "temp", blobId), { recursive: true });
 
     return c.json({ blobId }, 201);
 });
 
-app.get("/stash/:id/blob/:blobId", async c => {
+app.put("/stash/:id/blob/:blobId/chunk/:index", async c => {
     const id = c.req.param("id");
-
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
-    const path = join("./stashes", id, "blobs", c.req.param("blobId"));
-    if (!existsSync(path)) return c.json({ error: "Blob not found" }, 404);
+    const blobId = c.req.param("blobId");
+    const index = parseInt(c.req.param("index"));
+    if (isNaN(index) || index < 0) return c.json({ error: "Invalid chunk index" }, 400);
 
-    const data = await readFile(path);
-    return new Response(data, { headers: { "Content-Type": "application/octet-stream" } });
+    const tempDir = join("./stashes", id, "temp", blobId);
+    if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
+
+    await pipeline(
+        Readable.fromWeb(c.req.raw.body as any),
+        createWriteStream(join(tempDir, String(index).padStart(6, "0")))
+    );
+
+    return c.json({ ok: true });
+});
+
+app.post("/stash/:id/blob/:blobId/complete", async c => {
+    const id = c.req.param("id");
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const blobId = c.req.param("blobId");
+    const { chunkCount } = await c.req.json<{ chunkCount: number }>();
+
+    const tempDir = join("./stashes", id, "temp", blobId);
+    if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
+
+    const blobPath = join("./stashes", id, "blobs", blobId);
+    const dest = createWriteStream(blobPath);
+
+    for (let i = 0; i < chunkCount; i++) {
+        const chunkPath = join(tempDir, String(i).padStart(6, "0"));
+        if (!existsSync(chunkPath)) {
+            dest.destroy();
+            await unlink(blobPath).catch(() => { });
+            await rm(tempDir, { recursive: true, force: true });
+            return c.json({ error: `Missing chunk ${i}` }, 400);
+        }
+        await new Promise<void>((resolve, reject) => {
+            const src = createReadStream(chunkPath);
+            src.on("data", d => dest.write(d));
+            src.on("end", resolve);
+            src.on("error", reject);
+        });
+    }
+
+    await new Promise<void>((resolve, reject) => {
+        dest.end((err: Error | null | undefined) => err ? reject(err) : resolve());
+    });
+
+    await rm(tempDir, { recursive: true, force: true });
+
+    const { size } = await stat(blobPath);
+    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
+
+    if (reg.stashes[id].quotaUsed + size > QUOTA) {
+        await unlink(blobPath);
+        return c.json({ error: "Quota exceeded" }, 413);
+    }
+
+    reg.stashes[id].quotaUsed += size;
+    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+
+    return c.json({ blobId });
+});
+
+app.get("/stash/:id/blob/:blobId", async c => {
+    const id = c.req.param("id");
+    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+
+    const blobPath = join("./stashes", id, "blobs", c.req.param("blobId"));
+    if (!existsSync(blobPath)) return c.json({ error: "Blob not found" }, 404);
+
+    const { size } = await stat(blobPath);
+    const webStream = Readable.toWeb(createReadStream(blobPath)) as ReadableStream;
+
+    return new Response(webStream, {
+        headers: {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": String(size),
+        }
+    });
 });
 
 app.delete("/stash/:id/blob/:blobId", async c => {

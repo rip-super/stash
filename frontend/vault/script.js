@@ -153,11 +153,39 @@ function showToast(message) {
     document.body.appendChild(toast);
 
     return {
+        update(msg) { toast.textContent = msg; },
         hide() {
             toast.classList.add("hiding");
             toast.addEventListener("animationend", () => toast.remove(), { once: true });
         }
     };
+}
+
+function updateRowProgress(itemId, text) {
+    const row = listBodyEl.querySelector(`.list-row[data-id="${itemId}"]`);
+    if (!row) return;
+
+    const pct = text.match(/(\d+)%/)?.[1];
+
+    let bar = row.querySelector(".upload-progress-bar");
+    if (!bar) {
+        bar = document.createElement("div");
+        bar.className = "upload-progress-bar";
+        bar.style.cssText = `
+            position: absolute;
+            bottom: 0; left: 0;
+            height: 2px;
+            background: currentColor;
+            opacity: 0.35;
+            transition: width 0.2s ease;
+            pointer-events: none;
+        `;
+        row.style.position = "relative";
+        row.style.overflow = "hidden";
+        row.appendChild(bar);
+    }
+
+    bar.style.width = pct ? `${pct}%` : "100%";
 }
 
 function getUniqueChildName(folder, name) {
@@ -772,91 +800,108 @@ function renderSelection() {
         return;
     }
 
+    const PREVIEW_SIZE_LIMIT = 20 * 1024 * 1024;
+    const fileSize = item.rawSize || 0;
+
+    clearSelectionPreview();
+    selectionPreviewEl.classList.remove("hidden");
+
+    if (fileSize > PREVIEW_SIZE_LIMIT) {
+        selectionPreviewEl.innerHTML = `
+            <div class="selection-preview-inner">
+                <div class="selection-preview-empty">
+                    <button type="button" id="forcePreviewBtn" style="
+                        background: none;
+                        border: none;
+                        color: inherit;
+                        font: inherit;
+                        font-size: 0.8rem;
+                        cursor: pointer;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        gap: 5px;
+                        padding: 0;
+                    ">
+                        <span>this is a large file...</span>
+                        <span>load preview?</span>
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.getElementById("forcePreviewBtn")?.addEventListener("click", () => {
+            loadPreview(item, previewKind);
+        });
+
+        return;
+    }
+
+    loadPreview(item, previewKind);
+}
+
+function loadPreview(item, previewKind) {
     clearSelectionPreview();
     selectionPreviewEl.classList.remove("hidden");
     selectionPreviewEl.innerHTML = `
         <div class="selection-preview-inner">
-            <div class="selection-preview-empty">Loading preview...</div>
+            <div class="selection-preview-empty" id="previewStatus">Preparing preview...</div>
         </div>
     `;
 
     const requestToken = ++state.previewRequestToken;
 
+    const setStatus = msg => {
+        if (requestToken !== state.previewRequestToken) return;
+        const el = document.getElementById("previewStatus");
+        if (el) el.textContent = msg;
+    };
+
     (async () => {
         try {
             const { stashId, stashKeyBytes, token } = getStashContext();
-            const buffer = await apiDownloadBlob(stashId, token, item.blobId);
-            const decrypted = await decryptBlob(buffer, stashKeyBytes);
+
+            const buffer = await apiDownloadBlob(stashId, token, item.blobId,
+                p => setStatus(`Downloading ${Math.round(p * 100)}%`)
+            );
+
+            if (requestToken !== state.previewRequestToken) return;
+            setStatus("Decrypting...");
+
+            const decrypted = await decryptBlob(buffer, stashKeyBytes,
+                p => setStatus(`Decrypting ${Math.round(p * 100)}%`)
+            );
 
             if (requestToken !== state.previewRequestToken) return;
 
             if (previewKind === "text") {
-                const text = new TextDecoder().decode(decrypted.slice(0, 64 * 1024));
                 selectionPreviewEl.innerHTML = `
                     <div class="selection-preview-inner">
-                        <pre>${escapeHtml(text)}</pre>
+                        <pre>${escapeHtml(new TextDecoder().decode(decrypted.slice(0, 64 * 1024)))}</pre>
                     </div>
                 `;
                 return;
             }
 
-            let blob;
-
-            if (item.mimeType) {
-                blob = new Blob([decrypted], { type: item.mimeType });
-            } else if (previewKind === "image") {
-                blob = new Blob([decrypted], { type: "image/*" });
-            } else if (previewKind === "video") {
-                blob = new Blob([decrypted], { type: "video/mp4" });
-            } else if (previewKind === "audio") {
-                blob = new Blob([decrypted], { type: "audio/*" });
-            } else if (previewKind === "pdf") {
-                blob = new Blob([decrypted], { type: "application/pdf" });
-            } else {
-                blob = new Blob([decrypted]);
-            }
-
+            const mimeMap = { image: item.mimeType || "image/*", video: "video/mp4", audio: "audio/*", pdf: "application/pdf" };
+            const blob = new Blob([decrypted], { type: mimeMap[previewKind] || "" });
             const url = URL.createObjectURL(blob);
             state.previewObjectUrl = url;
 
-            if (previewKind === "image") {
-                selectionPreviewEl.innerHTML = `
-                    <div class="selection-preview-inner">
-                        <img src="${url}" alt="${escapeHtml(item.name)} preview" loading="lazy" />
-                    </div>
-                `;
-                return;
-            }
+            const tagMap = {
+                image: `<img src="${url}" alt="${escapeHtml(item.name)} preview" loading="lazy" />`,
+                video: `<video src="${url}" controls muted preload="metadata" playsinline></video>`,
+                audio: `<audio src="${url}" controls preload="metadata"></audio>`,
+                pdf: `<iframe src="${url}" title="${escapeHtml(item.name)} preview"></iframe>`,
+            };
 
-            if (previewKind === "video") {
-                selectionPreviewEl.innerHTML = `
-                    <div class="selection-preview-inner">
-                        <video src="${url}" controls muted preload="metadata" playsinline></video>
-                    </div>
-                `;
-                return;
-            }
-
-            if (previewKind === "audio") {
-                selectionPreviewEl.innerHTML = `
-                    <div class="selection-preview-inner">
-                        <audio src="${url}" controls preload="metadata"></audio>
-                    </div>
-                `;
-                return;
-            }
-
-            if (previewKind === "pdf") {
-                selectionPreviewEl.innerHTML = `
-                    <div class="selection-preview-inner">
-                        <iframe src="${url}" title="${escapeHtml(item.name)} preview"></iframe>
-                    </div>
-                `;
-                return;
-            }
+            selectionPreviewEl.innerHTML = `<div class="selection-preview-inner">${tagMap[previewKind]}</div>`;
         } catch (error) {
             if (requestToken !== state.previewRequestToken) return;
-
             console.error("Preview failed:", error);
             selectionPreviewEl.innerHTML = `
                 <div class="selection-preview-inner">
@@ -1028,21 +1073,13 @@ async function loadAndRenderQuota() {
 
 async function uploadOneFile(file, folder) {
     const { stashId, stashKeyBytes, token } = getStashContext();
-    const now = new Date().toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-    });
+    const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
     const newItem = {
         id: "file-" + crypto.randomUUID(),
         name: getUniqueChildName(folder, file.name),
-        type: "file",
-        size: "...",
-        modified: now,
-        blobId: null,
-        mimeType: file.type || "",
-        pending: true
+        type: "file", size: "...", modified: now,
+        blobId: null, mimeType: file.type || "", pending: true, rawSize: file.size,
     };
 
     folder.children.unshift(newItem);
@@ -1051,12 +1088,29 @@ async function uploadOneFile(file, folder) {
     await renderList();
 
     try {
-        const encrypted = await encryptBlob(await file.arrayBuffer(), stashKeyBytes);
-        const { blobId } = await apiUploadBlob(stashId, token, encrypted);
+        const chunkCount = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+        const totalServerChunks = chunkCount + 1;
+        let doneChunks = 0;
+
+        const { blobId } = await apiStartBlobUpload(stashId, token);
+        const CONCURRENCY = 2;
+        const inFlight = [];
+
+        await encryptBlob(await file.arrayBuffer(), stashKeyBytes, null, async (index, buffer) => {
+            inFlight.push(
+                apiUploadChunk(stashId, token, blobId, index, buffer).then(() => {
+                    doneChunks++;
+                    updateRowProgress(newItem.id, `uploading ${Math.round((doneChunks / totalServerChunks) * 100)}%`);
+                })
+            );
+            if (inFlight.length > CONCURRENCY) await inFlight.shift();
+        });
+
+        await Promise.all(inFlight);
+        const { blobId: confirmedId } = await apiCompleteBlobUpload(stashId, token, blobId, totalServerChunks);
 
         const kb = Math.max(1, Math.round(file.size / 1024));
-
-        newItem.blobId = blobId;
+        newItem.blobId = confirmedId;
         newItem.size = kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB";
         newItem.pending = false;
         await saveMetadata();
@@ -1212,59 +1266,58 @@ async function downloadSelected() {
 
     if (selectedItems.length === 1 && selectedItems[0].type === "file") {
         const selected = selectedItems[0];
-        const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
-        const decrypted = await decryptBlob(buffer, stashKeyBytes);
-        const url = URL.createObjectURL(new Blob([decrypted]));
-        const a = document.createElement("a");
-
-        a.href = url;
-        a.download = selected.name;
-        a.click();
-        URL.revokeObjectURL(url);
-
+        const toast = showToast("Downloading...");
+        try {
+            const buffer = await apiDownloadBlob(stashId, token, selected.blobId,
+                p => toast.update(`Downloading ${Math.round(p * 100)}%`)
+            );
+            toast.update("Decrypting...");
+            const decrypted = await decryptBlob(buffer, stashKeyBytes,
+                p => toast.update(`Decrypting ${Math.round(p * 100)}%`)
+            );
+            const url = URL.createObjectURL(new Blob([decrypted]));
+            const a = document.createElement("a");
+            a.href = url; a.download = selected.name; a.click();
+            URL.revokeObjectURL(url);
+        } finally {
+            toast.hide();
+        }
         return;
     }
 
-    const toast = showToast("Downloading! This might take while for large uploads...");
+    const toast = showToast("Preparing download...");
     const zip = new window.JSZip();
+    const allFiles = [];
 
     for (const selected of selectedItems) {
-        if (selected.type === "file") {
-            const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
-            zip.file(selected.name, await decryptBlob(buffer, stashKeyBytes));
-            continue;
-        }
-
-        const isSingleFolder = selectedItems.length === 1 && selectedItems[0].type === "folder";
-
-        const stack = [{
-            node: selected,
-            folder: isSingleFolder ? zip : zip.folder(selected.name)
-        }];
-
+        if (selected.type === "file") { allFiles.push({ node: selected, zipFolder: zip }); continue; }
+        const isSingleFolder = selectedItems.length === 1;
+        const stack = [{ node: selected, folder: isSingleFolder ? zip : zip.folder(selected.name) }];
         while (stack.length) {
             const { node, folder } = stack.pop();
 
             for (const child of node.children || []) {
-                if (child.type === "file") {
-                    const buffer = await apiDownloadBlob(stashId, token, child.blobId);
-                    folder.file(child.name, await decryptBlob(buffer, stashKeyBytes));
-                } else if (child.type === "folder") {
-                    const childFolder = folder.folder(child.name);
-                    stack.push({ node: child, folder: childFolder });
-                }
+                if (child.type === "file") allFiles.push({ node: child, zipFolder: folder });
+                else stack.push({ node: child, folder: folder.folder(child.name) });
             }
         }
     }
 
+    for (let i = 0; i < allFiles.length; i++) {
+        const { node, zipFolder } = allFiles[i];
+        toast.update(`Downloading ${i + 1}/${allFiles.length}: ${node.name}`);
+        const buffer = await apiDownloadBlob(stashId, token, node.blobId);
+        const decrypted = await decryptBlob(buffer, stashKeyBytes);
+        zipFolder.file(node.name, decrypted);
+    }
+
+    toast.update("Compressing...");
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
 
     a.href = url;
-    a.download = selectedItems.length === 1 && selectedItems[0].type === "folder"
-        ? `${selectedItems[0].name}.zip`
-        : "selection.zip";
+    a.download = selectedItems.length === 1 && selectedItems[0].type === "folder" ? `${selectedItems[0].name}.zip` : "selection.zip";
     a.click();
 
     URL.revokeObjectURL(url);
@@ -1276,35 +1329,39 @@ async function sendViaFiles() {
     if (!selected) return;
 
     const { stashId, stashKeyBytes, token } = getStashContext();
-    const toast = showToast("Decrypting files...");
+    const toast = showToast("Preparing files...");
     const filesToSend = [];
 
     try {
+        const allFiles = [];
+
         if (selected.type === "file") {
-            const buffer = await apiDownloadBlob(stashId, token, selected.blobId);
-            const decrypted = await decryptBlob(buffer, stashKeyBytes);
-            filesToSend.push({
-                name: selected.name,
-                type: selected.mimeType || "",
-                buffer: decrypted
-            });
+            allFiles.push(selected);
         } else {
-            async function collect(node) {
+            const stack = [selected];
+            while (stack.length) {
+                const node = stack.pop();
                 for (const child of node.children || []) {
-                    if (child.type === "file") {
-                        const buffer = await apiDownloadBlob(stashId, token, child.blobId);
-                        const decrypted = await decryptBlob(buffer, stashKeyBytes);
-                        filesToSend.push({
-                            name: child.name,
-                            type: child.mimeType || "",
-                            buffer: decrypted
-                        });
-                    } else if (child.type === "folder") {
-                        await collect(child);
-                    }
+                    if (child.type === "file") allFiles.push(child);
+                    else stack.push(child);
                 }
             }
-            await collect(selected);
+        }
+
+        for (let i = 0; i < allFiles.length; i++) {
+            const file = allFiles[i];
+            const label = allFiles.length > 1 ? ` (${i + 1}/${allFiles.length})` : "";
+
+            const buffer = await apiDownloadBlob(stashId, token, file.blobId,
+                p => toast.update(`Downloading${label} ${Math.round(p * 100)}%`)
+            );
+
+            toast.update(`Decrypting${label}...`);
+            const decrypted = await decryptBlob(buffer, stashKeyBytes,
+                p => toast.update(`Decrypting${label} ${Math.round(p * 100)}%`)
+            );
+
+            filesToSend.push({ name: file.name, type: file.mimeType || "", buffer: decrypted });
         }
 
         toast.hide();
@@ -1316,15 +1373,13 @@ async function sendViaFiles() {
             return;
         }
 
-        console.log("opened files window", filesWin);
-
         let pingInterval = null;
         let pingTimeout = null;
 
         const onReady = (event) => {
             if (event.origin !== "https://files.sahildash.dev") return;
             if (event.data?.type !== "stash:ready") return;
-            console.log("stash got message:", event.origin, event.data);
+
             clearInterval(pingInterval);
             clearTimeout(pingTimeout);
             window.removeEventListener("message", onReady);
@@ -1338,8 +1393,7 @@ async function sendViaFiles() {
         window.addEventListener("message", onReady);
 
         pingInterval = setInterval(() => {
-            console.log("sending ping");
-            try { filesWin.postMessage({ type: "stash:ping" }, "https://files.sahildash.dev"); } catch (e) { console.error("ping failed", e); }
+            try { filesWin.postMessage({ type: "stash:ping" }, "https://files.sahildash.dev"); } catch { }
         }, 300);
 
         pingTimeout = setTimeout(() => {
