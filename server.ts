@@ -1,7 +1,7 @@
 import { Hono, Context } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { readFile, writeFile, mkdir, stat, unlink, rm } from "fs/promises";
+import { readFile, writeFile, mkdir, stat, unlink, rm, readdir } from "fs/promises";
 import { existsSync, createReadStream, createWriteStream } from "fs";
 import { join } from "path";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -51,10 +51,27 @@ const accessCodes = new Map<string, AccessCode>();
 
 const QUOTA = 500 * 1024 * 1024;
 
+const STASHES_ROOT = "./stashes";
+const REGISTRY_PATH = join(STASHES_ROOT, "registry.json");
+
+const MAX_TOTAL_STORAGE = 50 * 1024 * 1024 * 1024;
+const TEMP_UPLOAD_TTL_MS = 60 * 60 * 1000;
+const TEMP_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+
 await mkdir("./stashes", { recursive: true });
 if (!existsSync(join("./stashes", "registry.json"))) {
     await writeFile(join("./stashes", "registry.json"), JSON.stringify({ stashes: {} }, null, 4));
 }
+
+await cleanupExpiredTempUploads().catch(error => {
+    console.error("Initial temp cleanup failed:", error);
+});
+
+setInterval(() => {
+    cleanupExpiredTempUploads().catch(error => {
+        console.error("Temp cleanup failed:", error);
+    });
+}, TEMP_CLEANUP_INTERVAL_MS);
 
 function getSession(c: Context, id: string) {
     const token = c.req.header("Authorization")?.slice(7);
@@ -67,6 +84,62 @@ function getSession(c: Context, id: string) {
 
 function auth(c: Context, id: string) {
     return !!getSession(c, id);
+}
+
+async function getDirectorySize(path: string): Promise<number> {
+    const info = await stat(path).catch(() => null);
+    if (!info) return 0;
+    if (!info.isDirectory()) return info.size;
+
+    let total = 0;
+    const entries = await readdir(path, { withFileTypes: true });
+
+    for (const entry of entries) {
+        total += await getDirectorySize(join(path, entry.name));
+    }
+
+    return total;
+}
+
+async function cleanupExpiredTempUploads() {
+    if (!existsSync(STASHES_ROOT)) return;
+
+    const stashEntries = await readdir(STASHES_ROOT, { withFileTypes: true });
+
+    for (const stashEntry of stashEntries) {
+        if (!stashEntry.isDirectory()) continue;
+
+        const tempRoot = join(STASHES_ROOT, stashEntry.name, "temp");
+        if (!existsSync(tempRoot)) continue;
+
+        const uploadEntries = await readdir(tempRoot, { withFileTypes: true });
+
+        for (const uploadEntry of uploadEntries) {
+            if (!uploadEntry.isDirectory()) continue;
+
+            const uploadDir = join(tempRoot, uploadEntry.name);
+            const sessionPath = join(uploadDir, "session.json");
+
+            let createdAt = 0;
+
+            if (existsSync(sessionPath)) {
+                const session = await readFile(sessionPath, "utf-8")
+                    .then(text => JSON.parse(text) as { createdAt?: number })
+                    .catch(() => null);
+
+                createdAt = session?.createdAt || 0;
+            }
+
+            if (!createdAt) {
+                const info = await stat(uploadDir).catch(() => null);
+                createdAt = info?.mtimeMs || 0;
+            }
+
+            if (createdAt && Date.now() - createdAt > TEMP_UPLOAD_TTL_MS) {
+                await rm(uploadDir, { recursive: true, force: true });
+            }
+        }
+    }
 }
 
 app.post("/stash", async c => {
@@ -266,8 +339,16 @@ app.post("/stash/:id/blob/start", async c => {
     const id = c.req.param("id");
     if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
 
+    const totalUsed = await getDirectorySize(STASHES_ROOT);
+    if (totalUsed >= MAX_TOTAL_STORAGE) {
+        return c.json({ error: "Server storage is full" }, 507);
+    }
+
     const blobId = randomBytes(16).toString("hex");
-    await mkdir(join("./stashes", id, "temp", blobId), { recursive: true });
+    const tempDir = join(STASHES_ROOT, id, "temp", blobId);
+
+    await mkdir(tempDir, { recursive: true });
+    await writeFile(join(tempDir, "session.json"), JSON.stringify({ createdAt: Date.now() }, null, 4));
 
     return c.json({ blobId }, 201);
 });
@@ -280,13 +361,60 @@ app.put("/stash/:id/blob/:blobId/chunk/:index", async c => {
     const index = parseInt(c.req.param("index"));
     if (isNaN(index) || index < 0) return c.json({ error: "Invalid chunk index" }, 400);
 
-    const tempDir = join("./stashes", id, "temp", blobId);
+    const tempDir = join(STASHES_ROOT, id, "temp", blobId);
     if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
 
-    await pipeline(
-        Readable.fromWeb(c.req.raw.body as any),
-        createWriteStream(join(tempDir, String(index).padStart(6, "0")))
-    );
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+
+    const chunkPath = join(tempDir, String(index).padStart(6, "0"));
+    const existingChunkSize = (await stat(chunkPath).catch(() => null))?.size || 0;
+
+    let tempSize = 0;
+    const tempEntries = await readdir(tempDir, { withFileTypes: true });
+
+    for (const entry of tempEntries) {
+        if (!entry.isFile()) continue;
+        if (entry.name === "session.json") continue;
+
+        const info = await stat(join(tempDir, entry.name)).catch(() => null);
+        tempSize += info?.size || 0;
+    }
+
+    const contentLength = parseInt(c.req.header("Content-Length") || "0");
+
+    if (contentLength > 0) {
+        const projectedTempSize = tempSize - existingChunkSize + contentLength;
+
+        if (reg.stashes[id].quotaUsed + projectedTempSize > QUOTA) {
+            return c.json({ error: "Quota exceeded" }, 413);
+        }
+
+        const totalUsed = await getDirectorySize(STASHES_ROOT);
+        const projectedTotalUsed = totalUsed + Math.max(0, contentLength - existingChunkSize);
+
+        if (projectedTotalUsed > MAX_TOTAL_STORAGE) {
+            return c.json({ error: "Server storage is full" }, 507);
+        }
+    }
+
+    await pipeline(Readable.fromWeb(c.req.raw.body as any), createWriteStream(chunkPath));
+
+    tempSize = 0;
+    const finalTempEntries = await readdir(tempDir, { withFileTypes: true });
+
+    for (const entry of finalTempEntries) {
+        if (!entry.isFile()) continue;
+        if (entry.name === "session.json") continue;
+
+        const info = await stat(join(tempDir, entry.name)).catch(() => null);
+        tempSize += info?.size || 0;
+    }
+
+    if (reg.stashes[id].quotaUsed + tempSize > QUOTA) {
+        await unlink(chunkPath).catch(() => { });
+        return c.json({ error: "Quota exceeded" }, 413);
+    }
 
     return c.json({ ok: true });
 });
@@ -298,44 +426,84 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
     const blobId = c.req.param("blobId");
     const { chunkCount } = await c.req.json<{ chunkCount: number }>();
 
-    const tempDir = join("./stashes", id, "temp", blobId);
-    if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
-
-    const blobPath = join("./stashes", id, "blobs", blobId);
-    const dest = createWriteStream(blobPath);
-
-    for (let i = 0; i < chunkCount; i++) {
-        const chunkPath = join(tempDir, String(i).padStart(6, "0"));
-        if (!existsSync(chunkPath)) {
-            dest.destroy();
-            await unlink(blobPath).catch(() => { });
-            await rm(tempDir, { recursive: true, force: true });
-            return c.json({ error: `Missing chunk ${i}` }, 400);
-        }
-        await new Promise<void>((resolve, reject) => {
-            const src = createReadStream(chunkPath);
-            src.on("data", d => dest.write(d));
-            src.on("end", resolve);
-            src.on("error", reject);
-        });
+    if (!Number.isInteger(chunkCount) || chunkCount <= 0) {
+        return c.json({ error: "Invalid chunkCount" }, 400);
     }
 
-    await new Promise<void>((resolve, reject) => {
-        dest.end((err: Error | null | undefined) => err ? reject(err) : resolve());
-    });
+    const tempDir = join(STASHES_ROOT, id, "temp", blobId);
+    if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
+
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
+
+    let tempSize = 0;
+    const tempEntries = await readdir(tempDir, { withFileTypes: true });
+
+    for (const entry of tempEntries) {
+        if (!entry.isFile()) continue;
+        if (entry.name === "session.json") continue;
+
+        const info = await stat(join(tempDir, entry.name)).catch(() => null);
+        tempSize += info?.size || 0;
+    }
+
+    if (reg.stashes[id].quotaUsed + tempSize > QUOTA) {
+        await rm(tempDir, { recursive: true, force: true });
+        return c.json({ error: "Quota exceeded" }, 413);
+    }
+
+    const totalUsed = await getDirectorySize(STASHES_ROOT);
+    if (totalUsed > MAX_TOTAL_STORAGE) {
+        await rm(tempDir, { recursive: true, force: true });
+        return c.json({ error: "Server storage is full" }, 507);
+    }
+
+    const blobPath = join(STASHES_ROOT, id, "blobs", blobId);
+    const dest = createWriteStream(blobPath);
+
+    try {
+        for (let i = 0; i < chunkCount; i++) {
+            const chunkPath = join(tempDir, String(i).padStart(6, "0"));
+
+            if (!existsSync(chunkPath)) {
+                dest.destroy();
+                await unlink(blobPath).catch(() => { });
+                await rm(tempDir, { recursive: true, force: true });
+                return c.json({ error: `Missing chunk ${i}` }, 400);
+            }
+
+            await new Promise<void>((resolve, reject) => {
+                const src = createReadStream(chunkPath);
+
+                src.on("error", reject);
+                dest.on("error", reject);
+                src.on("end", resolve);
+
+                src.pipe(dest, { end: false });
+            });
+        }
+
+        await new Promise<void>((resolve, reject) => {
+            dest.end((err: Error | null | undefined) => err ? reject(err) : resolve());
+        });
+    } catch (error) {
+        dest.destroy();
+        await unlink(blobPath).catch(() => { });
+        await rm(tempDir, { recursive: true, force: true });
+        throw error;
+    }
 
     await rm(tempDir, { recursive: true, force: true });
 
     const { size } = await stat(blobPath);
-    const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
 
     if (reg.stashes[id].quotaUsed + size > QUOTA) {
-        await unlink(blobPath);
+        await unlink(blobPath).catch(() => { });
         return c.json({ error: "Quota exceeded" }, 413);
     }
 
     reg.stashes[id].quotaUsed += size;
-    await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ blobId });
 });
