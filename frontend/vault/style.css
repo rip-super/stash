@@ -1987,6 +1987,411 @@ body::-webkit-scrollbar-corner,
         inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
+@media (max-width: 768px) {
+
+    html,
+    body {
+        overflow: auto;
+        height: auto;
+    }
+
+    .vault-shell {
+        height: auto;
+        max-height: none;
+        min-height: 100dvh;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto auto;
+        gap: 0.75rem;
+        padding: 0.85rem;
+        overflow: visible;
+    }
+
+    .vault-topbar {
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        animation: none;
+        opacity: 1;
+        transform: none;
+    }
+
+    .topbar-left {
+        display: grid;
+        grid-template-columns: auto auto auto;
+        grid-template-rows: auto auto;
+        column-gap: 0.65rem;
+        row-gap: 0.1rem;
+        align-items: center;
+        flex-wrap: unset;
+    }
+
+    .brand-lockup {
+        display: contents;
+    }
+
+    .brand-wordmark {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .brand-tagline {
+        grid-column: 1 / 4;
+        grid-row: 2;
+    }
+
+    .topbar-divider {
+        display: block;
+        grid-column: 2;
+        grid-row: 1;
+        width: 1px;
+        height: 1.4rem;
+        align-self: center;
+    }
+
+    .vault-intro {
+        grid-column: 3;
+        grid-row: 1;
+        flex: unset;
+        order: unset;
+    }
+
+    .vault-title {
+        font-size: 6vw;
+    }
+
+    .vault-description {
+        display: none;
+    }
+
+    .topbar-actions {
+        width: 100%;
+        gap: 0.6rem;
+    }
+
+    .topbar-actions .action {
+        flex: 1;
+        min-width: 0;
+        padding: 0.72rem 0.9rem;
+        font-size: 0.9rem;
+    }
+
+    .vault-frame {
+        min-height: 0;
+        animation: none;
+        opacity: 1;
+        transform: none;
+        overflow: visible;
+    }
+
+    .vault-header {
+        padding: 0.75rem 0.85rem;
+        border-radius: 1rem;
+        gap: 0.6rem;
+    }
+
+    .viewer-toolbar {
+        flex-direction: column;
+        gap: 0.65rem;
+    }
+
+    .viewer-left {
+        flex-wrap: wrap;
+        gap: 0.6rem;
+    }
+
+    .vault-search {
+        min-width: 0;
+        flex: 1 1 100%;
+    }
+
+    .icon-action {
+        width: 2.4rem;
+        height: 2.4rem;
+    }
+
+    .dropzone {
+        min-height: 420px;
+        border-radius: 1.1rem;
+        overflow: visible;
+    }
+
+    .list-head {
+        grid-template-columns: minmax(0, 1fr) 90px;
+        padding: 0.75rem 0.9rem 0.6rem;
+        font-size: 0.74rem;
+    }
+
+    .list-head div:last-child {
+        display: none;
+    }
+
+    .list-row {
+        grid-template-columns: minmax(0, 1fr) 90px;
+        padding: 0.8rem 0.6rem;
+        border-radius: 0.85rem;
+    }
+
+    .list-row .meta-cell:last-child {
+        display: none;
+    }
+
+    .list-body {
+        padding: 0.35rem 0.45rem 4.5rem;
+        overflow-y: visible;
+    }
+
+    .row-icon {
+        width: 2.1rem;
+        height: 2.1rem;
+        border-radius: 0.75rem;
+    }
+
+    .row-name {
+        font-size: 0.92rem;
+    }
+
+    .drag-parent-dock {
+        left: 0.6rem;
+        right: 0.6rem;
+        bottom: 0.6rem;
+    }
+
+    .sidebar-panel {
+        position: static;
+        animation: none;
+        opacity: 1;
+        transform: none;
+    }
+
+    .device-panel,
+    .device-card {
+        height: auto;
+    }
+
+    .device-card {
+        padding-bottom: 1.2rem;
+    }
+
+    .device-card-footer {
+        position: static;
+        padding-top: 0.75rem;
+        background: none;
+    }
+
+    .device-add-btn {
+        flex: 1;
+    }
+
+    .device-list-wrap {
+        overflow: visible;
+        max-height: 320px;
+        overflow-y: auto;
+    }
+
+    .selection-drawer {
+        position: fixed;
+        inset: auto 0 0 0;
+        z-index: 40;
+        height: auto;
+        max-height: 85dvh;
+        background: rgba(9, 9, 13, 0.6);
+        backdrop-filter: blur(8px);
+        border-radius: 1.4rem 1.4rem 0 0;
+        transform: translateY(100%);
+        opacity: 1;
+    }
+
+    .selection-drawer.open {
+        animation: mobileSelectionEnter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+        transform: translateY(0);
+    }
+
+    .selection-drawer.closing {
+        animation: mobileSelectionExit 0.2s cubic-bezier(0.4, 0, 1, 1) both;
+    }
+
+    .selection-card {
+        border-radius: 1.4rem 1.4rem 0 0;
+        overflow-y: auto;
+        max-height: 85dvh;
+    }
+
+    .selection-preview {
+        min-height: 180px;
+    }
+
+    .modal-shell {
+        padding: 0;
+        align-items: flex-end;
+    }
+
+    .device-modal-card {
+        width: 100%;
+        border-radius: 1.4rem 1.4rem 0 0;
+        transform: translateY(24px) scale(1);
+        max-height: 90dvh;
+        overflow-y: auto;
+    }
+
+    .modal-shell:not(.hidden) .device-modal-card {
+        transform: translateY(0) scale(1);
+    }
+
+    .modal-backdrop {
+        border-radius: 0;
+    }
+
+    .qr-wrap {
+        min-height: 200px;
+    }
+
+    .vault-footer {
+        grid-column: 1;
+        font-size: 0.78rem;
+        gap: 0.45rem;
+        padding-bottom: 0.35rem;
+    }
+
+    .breadcrumbs {
+        gap: 0.3rem;
+    }
+
+    .crumb {
+        font-size: 0.84rem;
+        padding: 0.24rem 0.42rem;
+    }
+
+    .drop-overlay-inner {
+        padding: 1.25rem;
+    }
+
+    .drop-glyph {
+        width: 3.2rem;
+        height: 3.2rem;
+        font-size: 1.4rem;
+    }
+
+    .drop-title {
+        font-size: 1.2rem;
+    }
+
+    .empty-state h2 {
+        font-size: 1.4rem;
+    }
+
+    .action {
+        padding: 0.75rem 1.1rem;
+        font-size: 0.92rem;
+        min-width: 0;
+    }
+
+    .modal-btn {
+        padding: 0.8rem;
+        font-size: 0.94rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .vault-shell {
+        padding: 0.65rem;
+        gap: 1rem;
+    }
+
+    .dropzone {
+        border-radius: 0.9rem;
+        min-height: 360px;
+    }
+
+    .list-head {
+        grid-template-columns: minmax(0, 1fr) 80px;
+        font-size: 0.7rem;
+        padding: 0.65rem 0.75rem 0.5rem;
+    }
+
+    .list-row {
+        grid-template-columns: minmax(0, 1fr) 80px;
+        padding: 0.72rem 0.5rem;
+        border-radius: 0.75rem;
+    }
+
+    .list-body {
+        padding: 0.3rem 0.35rem 4rem;
+    }
+
+    .row-icon {
+        width: 1.9rem;
+        height: 1.9rem;
+        border-radius: 0.65rem;
+    }
+
+    .row-icon svg {
+        width: 0.95rem;
+        height: 0.95rem;
+    }
+
+    .row-name {
+        font-size: 0.88rem;
+    }
+
+    .meta-cell {
+        font-size: 0.82rem;
+    }
+
+    .name-cell {
+        gap: 0.65rem;
+    }
+
+    .device-row {
+        padding: 0.7rem;
+        margin-bottom: 1rem;
+    }
+
+    .device-icon {
+        width: 2.2rem;
+        height: 2.2rem;
+        border-radius: 0.8rem;
+    }
+
+    .device-icon svg {
+        width: 1rem;
+        height: 1rem;
+    }
+
+    .access-code-value {
+        font-size: 1.6rem;
+        letter-spacing: 0.12em;
+    }
+
+    .vault-footer {
+        font-size: 0.72rem;
+        gap: 0.35rem;
+    }
+
+    .topbar-actions .action {
+        padding: 0.65rem 0.75rem;
+        font-size: 0.86rem;
+    }
+}
+
+@keyframes mobileSelectionEnter {
+    from {
+        transform: translateY(100%);
+    }
+
+    to {
+        transform: translateY(0);
+    }
+}
+
+@keyframes mobileSelectionExit {
+    from {
+        transform: translateY(0);
+    }
+
+    to {
+        transform: translateY(100%);
+    }
+}
+
 @keyframes grainShift {
     0% {
         background-position: 0 0, 0 0, 0 0, 0 0, 0 0;

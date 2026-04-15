@@ -312,6 +312,17 @@ body::before {
     color: var(--text-primary);
 }
 
+@media (max-width: 480px) {
+    img {
+        height: 180px;
+        width: 395px;
+    }
+
+    .footer a {
+        font-size: 0.98em;
+    }
+}
+
 @keyframes grainShift {
     0% {
         background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
