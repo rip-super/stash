@@ -42,38 +42,40 @@ const ZSTD_SKIP_EXTS = new Set([
 
 // #region DOM vars
 
-const breadcrumbsEl = document.getElementById("breadcrumbs");
-const listBodyEl = document.getElementById("listBody");
-const emptyStateEl = document.getElementById("emptyState");
-const listStateEl = document.getElementById("listState");
-const selectionPanelEl = document.getElementById("selectionPanel");
-const selectionLabelEl = document.getElementById("selectionLabel");
-const selectionNameEl = document.getElementById("selectionName");
-const selectionMetaEl = document.getElementById("selectionMeta");
-const vaultSearchEl = document.getElementById("vaultSearch");
-const dropzoneEl = document.getElementById("dropzone");
-const dropOverlayEl = document.getElementById("dropOverlay");
-const fileInputEl = document.getElementById("fileInput");
-const deviceListEl = document.getElementById("deviceList");
-const deviceSummaryEl = document.getElementById("deviceSummary");
-const backBtnEl = document.getElementById("backBtn");
-const forwardBtnEl = document.getElementById("forwardBtn");
-const closeSelectionBtnEl = document.getElementById("closeSelectionBtn");
-const dragParentDockEl = document.getElementById("dragParentDock");
-const parentDropzoneEl = document.getElementById("parentDropzone");
-const addDeviceBtnEl = document.getElementById("addDeviceBtn");
-const deviceConnectModalEl = document.getElementById("deviceConnectModal");
-const deviceDeleteModalEl = document.getElementById("deviceDeleteModal");
-const deviceQrCodeEl = document.getElementById("deviceQrCode");
-const deviceAccessCodeEl = document.getElementById("deviceAccessCode");
-const deviceAccessExpiryEl = document.getElementById("deviceAccessExpiry");
-const confirmRemoveDeviceBtnEl = document.getElementById("confirmRemoveDeviceBtn");
-const deviceDeleteCopyEl = document.getElementById("deviceDeleteCopy");
-const deleteStashModalEl = document.getElementById("deleteStashModal");
-const deleteStashBtnEl = document.getElementById("deleteStashBtn");
-const confirmDeleteStashBtnEl = document.getElementById("confirmDeleteStashBtn");
-const selectionPreviewEl = document.getElementById("selectionPreview");
-const sendViaFilesBtnEl = document.getElementById("sendViaFilesBtn");
+const $ = (id) => document.getElementById(id);
+
+const breadcrumbs = $("breadcrumbs");
+const listBody = $("listBody");
+const emptyState = $("emptyState");
+const listState = $("listState");
+const selectionPanel = $("selectionPanel");
+const selectionLabel = $("selectionLabel");
+const selectionName = $("selectionName");
+const selectionMeta = $("selectionMeta");
+const vaultSearch = $("vaultSearch");
+const dropzone = $("dropzone");
+const dropOverlay = $("dropOverlay");
+const fileInput = $("fileInput");
+const deviceList = $("deviceList");
+const deviceSummary = $("deviceSummary");
+const backBtn = $("backBtn");
+const forwardBtn = $("forwardBtn");
+const closeSelectionBtn = $("closeSelectionBtn");
+const dragParentDock = $("dragParentDock");
+const parentDropzone = $("parentDropzone");
+const addDeviceBtn = $("addDeviceBtn");
+const deviceConnectModal = $("deviceConnectModal");
+const deviceDeleteModal = $("deviceDeleteModal");
+const deviceQrCode = $("deviceQrCode");
+const deviceAccessCode = $("deviceAccessCode");
+const deviceAccessExpiry = $("deviceAccessExpiry");
+const confirmRemoveDeviceBtn = $("confirmRemoveDeviceBtn");
+const deviceDeleteCopy = $("deviceDeleteCopy");
+const deleteStashModal = $("deleteStashModal");
+const deleteStashBtn = $("deleteStashBtn");
+const confirmDeleteStashBtn = $("confirmDeleteStashBtn");
+const selectionPreview = $("selectionPreview");
+const sendViaFilesBtn = $("sendViaFilesBtn");
 
 // #endregion
 
@@ -215,7 +217,7 @@ function showToast(message) {
 }
 
 function updateRowProgress(itemId, text) {
-    const row = listBodyEl.querySelector(`.list-row[data-id="${itemId}"]`);
+    const row = listBody.querySelector(`.list-row[data-id="${itemId}"]`);
     if (!row) return;
 
     const pct = text.match(/(\d+)%/)?.[1];
@@ -331,9 +333,9 @@ function clearSelectionPreview() {
     state.previewRequestToken++;
     state.previewObjectUrl = null;
 
-    if (selectionPreviewEl) {
-        selectionPreviewEl.innerHTML = "";
-        selectionPreviewEl.classList.add("hidden");
+    if (selectionPreview) {
+        selectionPreview.innerHTML = "";
+        selectionPreview.classList.add("hidden");
     }
 }
 
@@ -656,7 +658,7 @@ function renderBreadcrumbs() {
         node = next;
     }
 
-    breadcrumbsEl.innerHTML = trail.map((crumb, index) => {
+    breadcrumbs.innerHTML = trail.map((crumb, index) => {
         const isLast = index === trail.length - 1;
 
         return `
@@ -672,7 +674,7 @@ function renderBreadcrumbs() {
         `;
     }).join("");
 
-    breadcrumbsEl.querySelectorAll(".crumb").forEach(button => {
+    breadcrumbs.querySelectorAll(".crumb").forEach(button => {
         button.addEventListener("click", () => navigateToCrumb(Number(button.dataset.crumbIndex)));
     });
 }
@@ -682,11 +684,11 @@ async function renderList() {
     const visibleItems = getVisibleItems(currentFolder.children || []);
 
     if (!visibleItems.length) {
-        emptyStateEl.classList.remove("hidden");
-        listStateEl.classList.add("hidden");
+        emptyState.classList.remove("hidden");
+        listState.classList.add("hidden");
 
         if (state.searchQuery.trim()) {
-            emptyStateEl.innerHTML = `
+            emptyState.innerHTML = `
                 <div class="empty-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></svg>
                 </div>
@@ -696,11 +698,11 @@ async function renderList() {
             `;
             document.getElementById("clearSearchBtn")?.addEventListener("click", async () => {
                 state.searchQuery = "";
-                vaultSearchEl.value = "";
+                vaultSearch.value = "";
                 await renderList();
             });
         } else {
-            emptyStateEl.innerHTML = `
+            emptyState.innerHTML = `
                 <div class="empty-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14" /></svg>
                 </div>
@@ -708,22 +710,22 @@ async function renderList() {
                 <p>Drop some files here to get started with stash!</p>
                 <button type="button" class="action" id="emptyUploadBtn">upload to vault</button>
             `;
-            document.getElementById("emptyUploadBtn")?.addEventListener("click", () => fileInputEl.click());
+            document.getElementById("emptyUploadBtn")?.addEventListener("click", () => fileInput.click());
         }
 
         state.navDirection = null;
         return;
     }
 
-    emptyStateEl.classList.add("hidden");
-    listStateEl.classList.remove("hidden");
+    emptyState.classList.add("hidden");
+    listState.classList.remove("hidden");
 
     const ordered = [
         ...visibleItems.filter(i => i.type === "folder").sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })),
         ...visibleItems.filter(i => i.type === "file").sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }))
     ];
 
-    listBodyEl.innerHTML = ordered.map((item, index) => {
+    listBody.innerHTML = ordered.map((item, index) => {
         const isRenaming = item.id === state.renamingItemId;
         const isNew = state.newItemIds.has(item.id);
 
@@ -761,11 +763,11 @@ async function renderList() {
     state.newItemIds.clear();
 
     if (state.navDirection) {
-        listBodyEl.classList.remove("enter-forward", "enter-back");
-        void listBodyEl.offsetWidth;
-        listBodyEl.classList.add(state.navDirection === "forward" ? "enter-forward" : "enter-back");
-        listBodyEl.addEventListener("animationend", () => {
-            listBodyEl.classList.remove("enter-forward", "enter-back");
+        listBody.classList.remove("enter-forward", "enter-back");
+        void listBody.offsetWidth;
+        listBody.classList.add(state.navDirection === "forward" ? "enter-forward" : "enter-back");
+        listBody.addEventListener("animationend", () => {
+            listBody.classList.remove("enter-forward", "enter-back");
         }, { once: true });
 
         state.navDirection = null;
@@ -810,13 +812,13 @@ async function renderList() {
         }
     }
 
-    listBodyEl.querySelectorAll(".list-row").forEach(row => {
+    listBody.querySelectorAll(".list-row").forEach(row => {
         const { id, type } = row.dataset;
 
         row.addEventListener("click", event => {
             if (state.renamingItemId === id) return;
 
-            const visibleRows = Array.from(listBodyEl.querySelectorAll(".list-row"));
+            const visibleRows = Array.from(listBody.querySelectorAll(".list-row"));
             const visibleIds = visibleRows.map(entry => entry.dataset.id);
 
             if (event.shiftKey && state.lastSelectedItemId && visibleIds.includes(state.lastSelectedItemId)) {
@@ -837,7 +839,7 @@ async function renderList() {
                 state.lastSelectedItemId = id;
             }
 
-            listBodyEl.querySelectorAll(".list-row").forEach(r => {
+            listBody.querySelectorAll(".list-row").forEach(r => {
                 r.classList.toggle("selected", state.selectedItemIds.includes(r.dataset.id));
             });
 
@@ -858,7 +860,7 @@ async function renderList() {
             if (!state.selectedItemIds.includes(id)) {
                 state.selectedItemIds = [id];
                 state.lastSelectedItemId = id;
-                listBodyEl.querySelectorAll(".list-row").forEach(r => {
+                listBody.querySelectorAll(".list-row").forEach(r => {
                     r.classList.toggle("selected", r.dataset.id === id);
                 });
                 renderSelection();
@@ -893,7 +895,7 @@ async function renderList() {
             state.folderDropTargetId = null;
             state.parentDropActive = false;
             setDragMoveMode(false);
-            parentDropzoneEl.classList.remove("active");
+            parentDropzone.classList.remove("active");
             await renderList();
         });
 
@@ -943,17 +945,17 @@ function renderSelection() {
     if (!selectedItems.length) {
         clearSelectionPreview();
 
-        if (selectionPanelEl.classList.contains("hidden") || selectionPanelEl.classList.contains("closing")) {
+        if (selectionPanel.classList.contains("hidden") || selectionPanel.classList.contains("closing")) {
             renameBtn.disabled = true;
             renameBtn.setAttribute("aria-disabled", "true");
             return;
         }
 
-        selectionPanelEl.classList.remove("open");
-        selectionPanelEl.classList.add("closing");
-        selectionPanelEl.addEventListener("animationend", () => {
-            selectionPanelEl.classList.add("hidden");
-            selectionPanelEl.classList.remove("closing");
+        selectionPanel.classList.remove("open");
+        selectionPanel.classList.add("closing");
+        selectionPanel.addEventListener("animationend", () => {
+            selectionPanel.classList.add("hidden");
+            selectionPanel.classList.remove("closing");
         }, { once: true });
 
         renameBtn.disabled = true;
@@ -961,24 +963,24 @@ function renderSelection() {
         return;
     }
 
-    selectionPanelEl.classList.remove("hidden", "closing");
-    requestAnimationFrame(() => selectionPanelEl.classList.add("open"));
+    selectionPanel.classList.remove("hidden", "closing");
+    requestAnimationFrame(() => selectionPanel.classList.add("open"));
 
     if (selectedItems.length > 1) {
         const fileCount = selectedItems.filter(item => item.type === "file").length;
         const folderCount = selectedItems.filter(item => item.type === "folder").length;
 
-        selectionLabelEl.textContent = "selected items";
+        selectionLabel.textContent = "selected items";
 
         if (fileCount && folderCount) {
-            selectionNameEl.textContent = `${selectedItems.length} items`;
+            selectionName.textContent = `${selectedItems.length} items`;
         } else if (fileCount) {
-            selectionNameEl.textContent = `${fileCount} file${fileCount === 1 ? "" : "s"}`;
+            selectionName.textContent = `${fileCount} file${fileCount === 1 ? "" : "s"}`;
         } else {
-            selectionNameEl.textContent = `${folderCount} folder${folderCount === 1 ? "" : "s"}`;
+            selectionName.textContent = `${folderCount} folder${folderCount === 1 ? "" : "s"}`;
         }
 
-        selectionMetaEl.innerHTML = `
+        selectionMeta.innerHTML = `
             <span class="subtle">
                 ${fileCount} file${fileCount === 1 ? "" : "s"} • ${folderCount} folder${folderCount === 1 ? "" : "s"}
             </span>
@@ -992,9 +994,9 @@ function renderSelection() {
 
     const item = selectedItems[0];
 
-    selectionLabelEl.textContent = item.type === "folder" ? "selected folder" : "selected file";
-    selectionNameEl.textContent = item.name;
-    selectionMetaEl.innerHTML = item.type === "folder"
+    selectionLabel.textContent = item.type === "folder" ? "selected folder" : "selected file";
+    selectionName.textContent = item.name;
+    selectionMeta.innerHTML = item.type === "folder"
         ? `<span class="subtle">${item.children?.length || 0} item${(item.children?.length || 0) === 1 ? "" : "s"}</span>`
         : `<span class="subtle">${item.size || "-"} • ${item.modified || "Unknown date"}${item.compression === "zstd" ? " • compressed" : ""}</span>`;
 
@@ -1038,10 +1040,10 @@ function renderSelection() {
     const fileSize = item.rawSize || 0;
 
     clearSelectionPreview();
-    selectionPreviewEl.classList.remove("hidden");
+    selectionPreview.classList.remove("hidden");
 
     if (fileSize > PREVIEW_SIZE_LIMIT) {
-        selectionPreviewEl.innerHTML = `
+        selectionPreview.innerHTML = `
             <div class="selection-preview-inner">
                 <button type="button" id="forcePreviewBtn" style="
                     background: none;
@@ -1082,8 +1084,8 @@ function renderSelection() {
 
 function loadPreview(item, previewKind) {
     clearSelectionPreview();
-    selectionPreviewEl.classList.remove("hidden");
-    selectionPreviewEl.innerHTML = `
+    selectionPreview.classList.remove("hidden");
+    selectionPreview.innerHTML = `
         <div class="selection-preview-inner">
             <div class="selection-preview-empty" id="previewStatus">Preparing preview...</div>
         </div>
@@ -1109,7 +1111,7 @@ function loadPreview(item, previewKind) {
             if (!cached || requestToken !== state.previewRequestToken) return;
 
             if (previewKind === "text") {
-                selectionPreviewEl.innerHTML = `
+                selectionPreview.innerHTML = `
                     <div class="selection-preview-inner">
                         <pre>${escapeHtml(new TextDecoder().decode(cached.buffer.slice(0, 64 * 1024)))}</pre>
                     </div>
@@ -1139,11 +1141,11 @@ function loadPreview(item, previewKind) {
                 pdf: `<iframe src="${cached.objectUrl}" title="${escapeHtml(item.name)} preview"></iframe>`,
             };
 
-            selectionPreviewEl.innerHTML = `<div class="selection-preview-inner">${tagMap[previewKind]}</div>`;
+            selectionPreview.innerHTML = `<div class="selection-preview-inner">${tagMap[previewKind]}</div>`;
         } catch (error) {
             if (requestToken !== state.previewRequestToken) return;
             console.error("Preview failed:", error);
-            selectionPreviewEl.innerHTML = `
+            selectionPreview.innerHTML = `
                 <div class="selection-preview-inner">
                     <div class="selection-preview-empty">Preview unavailable.</div>
                 </div>
@@ -1155,7 +1157,7 @@ function loadPreview(item, previewKind) {
 function renderDevices() {
     const { deviceId: currentDeviceId } = getStashContext();
 
-    deviceListEl.innerHTML = deviceData.map(device => {
+    deviceList.innerHTML = deviceData.map(device => {
         const isCurrentDevice = device.id === currentDeviceId;
 
         return `
@@ -1199,7 +1201,7 @@ function renderDevices() {
     `;
     }).join("");
 
-    deviceListEl.querySelectorAll(".rename-device-btn").forEach(btn => {
+    deviceList.querySelectorAll(".rename-device-btn").forEach(btn => {
         btn.addEventListener("click", async event => {
             event.stopPropagation();
             state.renamingDeviceId = btn.dataset.id;
@@ -1259,29 +1261,29 @@ function renderDevices() {
         });
     });
 
-    deviceListEl.querySelectorAll(".remove-device-btn").forEach(btn => {
+    deviceList.querySelectorAll(".remove-device-btn").forEach(btn => {
         btn.addEventListener("click", event => {
             event.stopPropagation();
 
             state.pendingDeviceDeleteId = btn.dataset.id;
 
             const device = deviceData.find(entry => entry.id === btn.dataset.id);
-            deviceDeleteCopyEl.textContent = device
+            deviceDeleteCopy.textContent = device
                 ? `"${device.name}" will lose access until it is connected again.`
                 : "This device will lose access until it is connected again.";
 
-            openModal(deviceDeleteModalEl);
+            openModal(deviceDeleteModal);
         });
     });
 
-    if (deviceSummaryEl) {
-        deviceSummaryEl.textContent = `${deviceData.length} device${deviceData.length === 1 ? "" : "s"} connected`;
+    if (deviceSummary) {
+        deviceSummary.textContent = `${deviceData.length} device${deviceData.length === 1 ? "" : "s"} connected`;
     }
 }
 
 async function render() {
-    backBtnEl.disabled = state.historyIndex === 0;
-    forwardBtnEl.disabled = state.historyIndex >= state.history.length - 1;
+    backBtn.disabled = state.historyIndex === 0;
+    forwardBtn.disabled = state.historyIndex >= state.history.length - 1;
     renderBreadcrumbs();
     await renderList();
     renderSelection();
@@ -1449,7 +1451,7 @@ async function deleteSelected() {
     const idsToDelete = new Set(selectedItems.map(item => item.id));
     const originalChildren = [...(currentFolder.children || [])];
 
-    const rowsToDelete = Array.from(listBodyEl.querySelectorAll(".list-row"))
+    const rowsToDelete = Array.from(listBody.querySelectorAll(".list-row"))
         .filter(row => idsToDelete.has(row.dataset.id));
 
     if (rowsToDelete.length) {
@@ -1720,12 +1722,12 @@ async function sendViaFiles() {
 function setDropActive(active) {
     if (state.draggedItemIds.length) return;
     state.dragActive = active;
-    dropzoneEl.classList.toggle("drag-active", active);
-    dropOverlayEl.setAttribute("aria-hidden", active ? "false" : "true");
+    dropzone.classList.toggle("drag-active", active);
+    dropOverlay.setAttribute("aria-hidden", active ? "false" : "true");
 }
 
 function setDragMoveMode(active) {
-    dragParentDockEl.classList.toggle("hidden", !active || state.path.length === 0);
+    dragParentDock.classList.toggle("hidden", !active || state.path.length === 0);
 }
 
 function isDescendantFolder(sourceId, targetFolderId) {
@@ -1860,7 +1862,7 @@ async function moveItemToParentFolder() {
             state.draggedItemIds = [];
             state.folderDropTargetId = null;
             state.parentDropActive = false;
-            parentDropzoneEl.classList.remove("active");
+            parentDropzone.classList.remove("active");
             setDragMoveMode(false);
             await render();
             return;
@@ -1878,7 +1880,7 @@ async function moveItemToParentFolder() {
             state.draggedItemIds = [];
             state.folderDropTargetId = null;
             state.parentDropActive = false;
-            parentDropzoneEl.classList.remove("active");
+            parentDropzone.classList.remove("active");
             setDragMoveMode(false);
             await render();
             return;
@@ -1899,7 +1901,7 @@ async function moveItemToParentFolder() {
     state.draggedItemIds = [];
     state.folderDropTargetId = null;
     state.parentDropActive = false;
-    parentDropzoneEl.classList.remove("active");
+    parentDropzone.classList.remove("active");
 
     setDragMoveMode(false);
     await saveMetadata();
@@ -1910,25 +1912,25 @@ async function moveItemToParentFolder() {
 
 // #region Event Listeners
 
-document.getElementById("uploadBtn").addEventListener("click", () => fileInputEl.click());
+document.getElementById("uploadBtn").addEventListener("click", () => fileInput.click());
 document.getElementById("newFolderBtn").addEventListener("click", addFolder);
 document.getElementById("deleteBtn").addEventListener("click", deleteSelected);
 document.getElementById("renameBtn").addEventListener("click", startInlineRename);
 document.getElementById("downloadBtn").addEventListener("click", downloadSelected);
 
-closeSelectionBtnEl.addEventListener("click", () => {
+closeSelectionBtn.addEventListener("click", () => {
     clearSelectionPreview();
     clearSelection();
-    listBodyEl.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
+    listBody.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
     renderSelection();
 });
 
-backBtnEl.addEventListener("click", goBack);
-forwardBtnEl.addEventListener("click", goForward);
+backBtn.addEventListener("click", goBack);
+forwardBtn.addEventListener("click", goForward);
 
-fileInputEl.addEventListener("change", event => {
+fileInput.addEventListener("change", event => {
     if (event.target.files?.length) upload(event.target.files);
-    fileInputEl.value = "";
+    fileInput.value = "";
 });
 
 document.addEventListener("dragover", event => {
@@ -2045,42 +2047,42 @@ document.addEventListener("mouseleave", () => {
     if (!state.draggedItemIds.length) setDropActive(false);
 });
 
-dropzoneEl.addEventListener("click", event => {
+dropzone.addEventListener("click", event => {
     if (event.target.closest(".list-row")) return;
     if (event.target.closest(".selection-card")) return;
     if (event.target.closest(".parent-dropzone")) return;
 
     clearSelection();
-    listBodyEl.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
+    listBody.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
     renderSelection();
 });
 
-listStateEl.addEventListener("click", event => {
+listState.addEventListener("click", event => {
     if (event.target.closest(".list-row")) return;
 
     clearSelection();
-    listBodyEl.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
+    listBody.querySelectorAll(".list-row").forEach(row => row.classList.remove("selected"));
     renderSelection();
 });
 
-parentDropzoneEl.addEventListener("dragover", event => {
+parentDropzone.addEventListener("dragover", event => {
     if (!state.draggedItemIds.length || state.path.length === 0) return;
     event.preventDefault();
     state.parentDropActive = true;
-    parentDropzoneEl.classList.add("active");
+    parentDropzone.classList.add("active");
 });
 
-parentDropzoneEl.addEventListener("dragleave", event => {
-    if (!parentDropzoneEl.contains(event.relatedTarget)) {
+parentDropzone.addEventListener("dragleave", event => {
+    if (!parentDropzone.contains(event.relatedTarget)) {
         state.parentDropActive = false;
-        parentDropzoneEl.classList.remove("active");
+        parentDropzone.classList.remove("active");
     }
 });
 
-parentDropzoneEl.addEventListener("drop", async event => {
+parentDropzone.addEventListener("drop", async event => {
     event.preventDefault();
     state.parentDropActive = false;
-    parentDropzoneEl.classList.remove("active");
+    parentDropzone.classList.remove("active");
     await moveItemToParentFolder();
 });
 
@@ -2092,12 +2094,12 @@ window.addEventListener("blur", async () => {
     state.draggedItemIds = [];
     state.folderDropTargetId = null;
     state.parentDropActive = false;
-    parentDropzoneEl.classList.remove("active");
+    parentDropzone.classList.remove("active");
     setDragMoveMode(false);
     await renderList();
 });
 
-vaultSearchEl.addEventListener("input", async event => {
+vaultSearch.addEventListener("input", async event => {
     state.searchQuery = event.target.value;
     clearSelection();
     await renderList();
@@ -2123,14 +2125,14 @@ document.addEventListener("keydown", async event => {
     }
 });
 
-addDeviceBtnEl?.addEventListener("click", async () => {
-    openModal(deviceConnectModalEl);
+addDeviceBtn?.addEventListener("click", async () => {
+    openModal(deviceConnectModal);
     startDeviceRefresh();
 
     state.currentAccessCode = "";
-    deviceAccessCodeEl.textContent = "------";
-    deviceAccessExpiryEl.textContent = "Generating secure code...";
-    deviceQrCodeEl.innerHTML = "";
+    deviceAccessCode.textContent = "------";
+    deviceAccessExpiry.textContent = "Generating secure code...";
+    deviceQrCode.innerHTML = "";
 
     try {
         const { stashId, stashKeyBytes, token } = getStashContext();
@@ -2145,14 +2147,14 @@ addDeviceBtnEl?.addEventListener("click", async () => {
         await apiPutAccessCodeTransfer(stashId, token, code, transfer);
 
         state.currentAccessCode = code;
-        deviceAccessCodeEl.textContent = code;
-        deviceAccessExpiryEl.textContent = `Valid for ${Math.floor(expiresIn / 60)} minutes`;
+        deviceAccessCode.textContent = code;
+        deviceAccessExpiry.textContent = `Valid for ${Math.floor(expiresIn / 60)} minutes`;
 
         const joinUrl = `${window.location.origin}/?join=${encodeURIComponent(code)}`;
 
-        deviceQrCodeEl.innerHTML = "";
+        deviceQrCode.innerHTML = "";
         const canvas = document.createElement("canvas");
-        deviceQrCodeEl.appendChild(canvas);
+        deviceQrCode.appendChild(canvas);
 
         await window.QRCode.toCanvas(canvas, joinUrl, {
             width: 220,
@@ -2161,8 +2163,8 @@ addDeviceBtnEl?.addEventListener("click", async () => {
         });
     } catch (error) {
         console.error("Failed to generate access code:", error);
-        deviceAccessCodeEl.textContent = "ERROR";
-        deviceAccessExpiryEl.textContent = "Could not generate code";
+        deviceAccessCode.textContent = "ERROR";
+        deviceAccessExpiry.textContent = "Could not generate code";
         const toast = showToast("Could not generate access code.");
         setTimeout(() => toast.hide(), 2000);
     }
@@ -2181,11 +2183,11 @@ document.querySelectorAll("[data-close-modal]").forEach(btn => {
     });
 });
 
-confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
+confirmRemoveDeviceBtn?.addEventListener("click", async () => {
     if (!state.pendingDeviceDeleteId) return;
 
     const deviceId = state.pendingDeviceDeleteId;
-    const row = deviceListEl.querySelector(`.device-row[data-id="${deviceId}"]`);
+    const row = deviceList.querySelector(`.device-row[data-id="${deviceId}"]`);
 
     try {
         const { stashId, token } = getStashContext();
@@ -2205,7 +2207,7 @@ confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
         }
 
         state.pendingDeviceDeleteId = null;
-        closeModal(deviceDeleteModalEl);
+        closeModal(deviceDeleteModal);
     } catch (error) {
         console.error("Failed to remove device:", error);
         const toast = showToast("Could not remove device.");
@@ -2214,7 +2216,7 @@ confirmRemoveDeviceBtnEl?.addEventListener("click", async () => {
 });
 
 document.getElementById("deleteStashBtn").addEventListener("click", () => {
-    openModal(deleteStashModalEl);
+    openModal(deleteStashModal);
 });
 
 document.getElementById("confirmDeleteStashBtn").addEventListener("click", async () => {
@@ -2234,7 +2236,7 @@ document.getElementById("confirmDeleteStashBtn").addEventListener("click", async
     window.location.replace("/");
 });
 
-sendViaFilesBtnEl?.addEventListener("click", sendViaFiles);
+sendViaFilesBtn?.addEventListener("click", sendViaFiles);
 
 // #endregion
 
