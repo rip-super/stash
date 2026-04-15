@@ -1,32 +1,3 @@
-document.addEventListener("DOMContentLoaded", async () => {
-    const params = new URLSearchParams(window.location.search);
-    const join = params.get("join");
-    const secret = params.get("secret");
-
-    if (join) {
-        const ua = navigator.userAgent || "";
-        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
-        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
-
-        openModal(`
-            <div class="modal-title">Connecting device</div>
-            <div class="modal-sub">Securely signing you in...</div>
-            <div id="modal-error" style="font-size:0.85rem;color:#e06c6c;margin-top:0.75rem;text-align:center"></div>
-        `);
-
-        await joinByCode(join, {
-            secret,
-            deviceName,
-            deviceType,
-        });
-
-        history.replaceState({}, "", window.location.pathname);
-        return;
-    }
-
-    tryAutoLogin();
-});
-
 const [createBtn, joinBtn] = document.querySelectorAll(".action");
 
 function openModal(html) {
@@ -76,10 +47,7 @@ async function createStash() {
         const phraseBytes = await phraseToBytes(phrase);
         const recoveryId = await deriveRecoveryId(phraseBytes);
 
-        const ua = navigator.userAgent || "";
-        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
-        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
-
+        const { deviceType, deviceName } = getDeviceInfo();
         const { device } = await apiCreateStash({
             id: stashId,
             authVerifier,
@@ -191,10 +159,7 @@ async function recoveryByPhrase(phrase) {
         const stashKey = await unwrapStashKey(recovery.encryptedKey, recovery.iv, wrappingKey);
         const stashKeyBytes = await exportKeyBytes(stashKey);
 
-        const ua = navigator.userAgent || "";
-        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
-        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
-
+        const { deviceType, deviceName } = getDeviceInfo();
         const { device } = await apiCreateRecoveryDevice(recoveryId, deviceName, deviceType);
 
         localStorage.setItem(STORAGE_KEYS.stashId, recovery.stashId);
@@ -278,6 +243,57 @@ async function tryAutoLogin() {
 }
 
 const enterStash = () => window.location.href = "/vault";
+
+function getDeviceInfo() {
+    const ua = navigator.userAgent || "";
+    const isTouch = navigator.maxTouchPoints > 0;
+    const isMobileUA = /iPhone|Android.+Mobile|Mobile/i.test(ua);
+    const isIpad = /iPad/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+    let type = "desktop";
+
+    if (isIpad) {
+        type = "tablet";
+    } else if (isMobileUA) {
+        type = "mobile";
+    } else if (isTouch && window.innerWidth < 900) {
+        type = "mobile";
+    } else if (isTouch) {
+        type = "tablet";
+    }
+
+    return {
+        deviceType: type,
+        deviceName: type === "mobile" ? "Phone" : type === "tablet" ? "Tablet" : "Desktop"
+    };
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+    const params = new URLSearchParams(window.location.search);
+    const join = params.get("join");
+    const secret = params.get("secret");
+
+    if (join) {
+        const { deviceType, deviceName } = getDeviceInfo();
+
+        openModal(`
+            <div class="modal-title">Connecting device</div>
+            <div class="modal-sub">Securely signing you in...</div>
+            <div id="modal-error" style="font-size:0.85rem;color:#e06c6c;margin-top:0.75rem;text-align:center"></div>
+        `);
+
+        await joinByCode(join, {
+            secret,
+            deviceName,
+            deviceType,
+        });
+
+        history.replaceState({}, "", window.location.pathname);
+        return;
+    }
+
+    tryAutoLogin();
+});
 
 createBtn.addEventListener("click", e => {
     e.preventDefault();

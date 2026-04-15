@@ -312,14 +312,14 @@ body::before {
     color: var(--text-primary);
 }
 
-@media (max-width: 480px) {
+@media (max-width: 768px) {
     img {
-        height: 180px;
-        width: 395px;
+        height: 162px;
+        width: 366px;
     }
 
     .footer a {
-        font-size: 0.98em;
+        font-size: 0.87em;
     }
 }
 

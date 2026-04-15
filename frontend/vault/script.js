@@ -1043,28 +1043,30 @@ function renderSelection() {
     if (fileSize > PREVIEW_SIZE_LIMIT) {
         selectionPreviewEl.innerHTML = `
             <div class="selection-preview-inner">
-                <div class="selection-preview-empty">
-                    <button type="button" id="forcePreviewBtn" style="
-                        background: none;
-                        border: none;
-                        color: inherit;
-                        font: inherit;
-                        font-size: 0.8rem;
-                        cursor: pointer;
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                        gap: 5px;
-                        padding: 0;
-                    ">
-                        <span>this is a large file...</span>
-                        <span>load preview?</span>
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                            <circle cx="12" cy="12" r="3"/>
-                        </svg>
-                    </button>
-                </div>
+                <button type="button" id="forcePreviewBtn" style="
+                    background: none;
+                    border: none;
+                    color: inherit;
+                    opacity: 0.45;
+                    font: inherit;
+                    font-size: 0.8rem;
+                    cursor: pointer;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 5px;
+                    padding: 0;
+                    width: 100%;
+                    height: 100%;
+                ">
+                    <span>this is a large file</span>
+                    <span>load preview</span>
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                </button>
             </div>
         `;
 
@@ -2132,15 +2134,7 @@ addDeviceBtnEl?.addEventListener("click", async () => {
 
     try {
         const { stashId, stashKeyBytes, token } = getStashContext();
-
-        const ua = navigator.userAgent || "";
-        const deviceType = /iPad|Tablet/i.test(ua) ? "tablet" : /iPhone|Android.+Mobile|Mobile/i.test(ua) ? "mobile" : "desktop";
-        const deviceName = deviceType === "mobile" ? "Phone" : deviceType === "tablet" ? "Tablet" : "Desktop";
-
-        const { code, expiresIn } = await apiCreateAccessCode(stashId, token, {
-            name: deviceName,
-            type: deviceType,
-        });
+        const { code, expiresIn } = await apiCreateAccessCode(stashId, token);
 
         const salt = crypto.getRandomValues(new Uint8Array(32));
         const wrapKey = await deriveWrappingKey(code, salt);

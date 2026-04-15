@@ -39,10 +39,6 @@ type AccessCode = {
         encryptedKey: string;
         salt: string;
     };
-    pendingDevice?: {
-        name: string;
-        type: "desktop" | "mobile" | "tablet" | "server";
-    };
 };
 
 interface BlobIndexEntry {
@@ -835,7 +831,6 @@ app.post("/stash/:id/access-code", async c => {
     accessCodes.set(code, {
         stashId: id,
         expiresAt: Date.now() + 10 * 60 * 1000,
-        pendingDevice: device
     });
 
     return c.json({ code, expiresIn: 600 });
@@ -885,18 +880,11 @@ app.post("/stash/join/:token", async c => {
         return c.json({ error: "Access code not ready yet" }, 409);
     }
 
-    const { stashId, transfer, pendingDevice } = entry;
+    const { stashId, transfer } = entry;
     accessCodes.delete(code);
 
-    const resolvedName =
-        pendingDevice?.name?.trim() ||
-        (typeof body.deviceName === "string" ? body.deviceName.trim() : "");
-
-    const resolvedType =
-        pendingDevice?.type ||
-        (["desktop", "mobile", "tablet", "server"].includes(body.deviceType || "")
-            ? body.deviceType
-            : undefined);
+    const resolvedName = typeof body.deviceName === "string" ? body.deviceName.trim() : "";
+    const resolvedType = ["desktop", "mobile", "tablet", "server"].includes(body.deviceType || "") ? body.deviceType : undefined;
 
     let joinedDevice: Device | null = null;
 

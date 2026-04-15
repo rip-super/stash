@@ -389,12 +389,12 @@ async function apiRemoveDevice(stashId, token, deviceId) {
     });
 }
 
-async function apiCreateAccessCode(stashId, token, device) {
+async function apiCreateAccessCode(stashId, token) {
     const res = await apiFetch(`/stash/${stashId}/access-code`, {
         method: "POST",
         token,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device }),
+        body: JSON.stringify({})
     });
     return res.json();
 }
