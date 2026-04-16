@@ -24,7 +24,18 @@ const state = {
     previewRequestToken: 0,
     fileCache: new Map(),
     fileCacheBytes: 0,
+    marqueePrimed: false,
+    marqueeActive: false,
+    marqueeStartX: 0,
+    marqueeStartY: 0,
+    marqueeCurrentX: 0,
+    marqueeCurrentY: 0,
+    marqueeAdditive: false,
+    marqueeBaseSelection: [],
+    marqueeScrollRaf: 0,
 };
+
+let marqueeJustFinished = false;
 
 const FILE_CACHE_MAX_BYTES = 300 * 1024 * 1024;
 const ZSTD_MIN_SIZE = 32 * 1024;
@@ -76,6 +87,7 @@ const deleteStashBtn = $("deleteStashBtn");
 const confirmDeleteStashBtn = $("confirmDeleteStashBtn");
 const selectionPreview = $("selectionPreview");
 const sendViaFilesBtn = $("sendViaFilesBtn");
+const selectionMarquee = $("selectionMarquee");
 
 // #endregion
 
@@ -2047,7 +2059,159 @@ document.addEventListener("mouseleave", () => {
     if (!state.draggedItemIds.length) setDropActive(false);
 });
 
+document.addEventListener("mousemove", event => {
+    if (!state.marqueePrimed && !state.marqueeActive) return;
+
+    state.marqueeCurrentX = event.clientX;
+    state.marqueeCurrentY = event.clientY;
+
+    if (!state.marqueeActive) {
+        const dx = event.clientX - state.marqueeStartX;
+        const dy = event.clientY - state.marqueeStartY;
+
+        if (Math.hypot(dx, dy) < 5) return;
+
+        state.marqueeActive = true;
+
+        selectionMarquee.classList.remove("hidden");
+        document.body.classList.add("is-marquee-selecting");
+
+        if (!state.marqueeAdditive) {
+            clearSelection();
+            listBody.querySelectorAll(".list-row").forEach(row => {
+                row.classList.remove("selected");
+            });
+            renderSelection();
+        }
+
+        if (!state.marqueeScrollRaf) {
+            const tick = () => {
+                if (!state.marqueeActive) {
+                    state.marqueeScrollRaf = 0;
+                    return;
+                }
+
+                const rect = listBody.getBoundingClientRect();
+                const edge = 36;
+                const maxStep = 18;
+                let dy = 0;
+
+                if (state.marqueeCurrentY < rect.top + edge) {
+                    const dist = rect.top + edge - state.marqueeCurrentY;
+                    dy = -Math.min(maxStep, Math.max(4, dist * 0.35));
+                } else if (state.marqueeCurrentY > rect.bottom - edge) {
+                    const dist = state.marqueeCurrentY - (rect.bottom - edge);
+                    dy = Math.min(maxStep, Math.max(4, dist * 0.35));
+                }
+
+                if (dy !== 0) {
+                    listBody.scrollTop += dy;
+
+                    const left = Math.min(state.marqueeStartX, state.marqueeCurrentX);
+                    const top = Math.min(state.marqueeStartY, state.marqueeCurrentY);
+                    const right = Math.max(state.marqueeStartX, state.marqueeCurrentX);
+                    const bottom = Math.max(state.marqueeStartY, state.marqueeCurrentY);
+
+                    const hitIds = [];
+
+                    listBody.querySelectorAll(".list-row").forEach(row => {
+                        const r = row.getBoundingClientRect();
+                        const hit = !(
+                            r.right < left ||
+                            r.left > right ||
+                            r.bottom < top ||
+                            r.top > bottom
+                        );
+
+                        if (hit) hitIds.push(row.dataset.id);
+                    });
+
+                    const nextSelection = state.marqueeAdditive ? [...new Set([...state.marqueeBaseSelection, ...hitIds])] : hitIds;
+                    state.selectedItemIds = nextSelection;
+                    state.lastSelectedItemId = nextSelection[nextSelection.length - 1] || null;
+
+                    listBody.querySelectorAll(".list-row").forEach(row => {
+                        row.classList.toggle("selected", nextSelection.includes(row.dataset.id));
+                    });
+
+                    renderSelection();
+                }
+
+                state.marqueeScrollRaf = requestAnimationFrame(tick);
+            };
+
+            state.marqueeScrollRaf = requestAnimationFrame(tick);
+        }
+    }
+
+    if (!state.marqueeActive) return;
+
+    event.preventDefault();
+
+    const dz = dropzone.getBoundingClientRect();
+
+    const left = Math.min(state.marqueeStartX, state.marqueeCurrentX);
+    const top = Math.min(state.marqueeStartY, state.marqueeCurrentY);
+    const width = Math.abs(state.marqueeCurrentX - state.marqueeStartX);
+    const height = Math.abs(state.marqueeCurrentY - state.marqueeStartY);
+
+    selectionMarquee.style.left = `${left - dz.left}px`;
+    selectionMarquee.style.top = `${top - dz.top}px`;
+    selectionMarquee.style.width = `${width}px`;
+    selectionMarquee.style.height = `${height}px`;
+
+    const right = left + width;
+    const bottom = top + height;
+
+    const hitIds = [];
+
+    listBody.querySelectorAll(".list-row").forEach(row => {
+        const r = row.getBoundingClientRect();
+        const hit = !(
+            r.right < left ||
+            r.left > right ||
+            r.bottom < top ||
+            r.top > bottom
+        );
+
+        if (hit) hitIds.push(row.dataset.id);
+    });
+
+    const nextSelection = state.marqueeAdditive ? [...new Set([...state.marqueeBaseSelection, ...hitIds])] : hitIds;
+    state.selectedItemIds = nextSelection;
+    state.lastSelectedItemId = nextSelection[nextSelection.length - 1] || null;
+
+    listBody.querySelectorAll(".list-row").forEach(row => {
+        row.classList.toggle("selected", nextSelection.includes(row.dataset.id));
+    });
+
+    renderSelection();
+});
+
+document.addEventListener("mouseup", () => {
+    state.marqueePrimed = false;
+
+    if (!state.marqueeActive) return;
+
+    state.marqueeActive = false;
+    state.marqueeBaseSelection = [];
+
+    selectionMarquee.classList.add("hidden");
+    document.body.classList.remove("is-marquee-selecting");
+
+    if (state.marqueeScrollRaf) {
+        cancelAnimationFrame(state.marqueeScrollRaf);
+        state.marqueeScrollRaf = 0;
+    }
+
+    marqueeJustFinished = true;
+    setTimeout(() => {
+        marqueeJustFinished = false;
+    }, 0);
+});
+
 dropzone.addEventListener("click", event => {
+    if (marqueeJustFinished) return;
     if (event.target.closest(".list-row")) return;
     if (event.target.closest(".selection-card")) return;
     if (event.target.closest(".parent-dropzone")) return;
@@ -2058,6 +2222,7 @@ dropzone.addEventListener("click", event => {
 });
 
 listState.addEventListener("click", event => {
+    if (marqueeJustFinished) return;
     if (event.target.closest(".list-row")) return;
 
     clearSelection();
@@ -2090,6 +2255,18 @@ window.addEventListener("blur", async () => {
     setDropActive(false);
 
     if (!state.draggedItemIds.length) return;
+
+    state.marqueePrimed = false;
+    state.marqueeActive = false;
+    state.marqueeBaseSelection = [];
+
+    selectionMarquee.classList.add("hidden");
+    document.body.classList.remove("is-marquee-selecting");
+
+    if (state.marqueeScrollRaf) {
+        cancelAnimationFrame(state.marqueeScrollRaf);
+        state.marqueeScrollRaf = 0;
+    }
 
     state.draggedItemIds = [];
     state.folderDropTargetId = null;
@@ -2237,6 +2414,23 @@ document.getElementById("confirmDeleteStashBtn").addEventListener("click", async
 });
 
 sendViaFilesBtn?.addEventListener("click", sendViaFiles);
+
+listBody.addEventListener("mousedown", event => {
+    if (event.button !== 0) return;
+    if (event.target.closest(".list-row")) return;
+    if (event.target.closest(".rename-input")) return;
+    if (state.renamingItemId) return;
+    if (state.draggedItemIds.length) return;
+
+    state.marqueePrimed = true;
+    state.marqueeActive = false;
+    state.marqueeStartX = event.clientX;
+    state.marqueeStartY = event.clientY;
+    state.marqueeCurrentX = event.clientX;
+    state.marqueeCurrentY = event.clientY;
+    state.marqueeAdditive = event.ctrlKey || event.metaKey;
+    state.marqueeBaseSelection = state.marqueeAdditive ? [...state.selectedItemIds] : [];
+});
 
 // #endregion
 

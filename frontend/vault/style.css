@@ -1987,6 +1987,24 @@ body::-webkit-scrollbar-corner,
         inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
+.selection-marquee {
+    position: absolute;
+    z-index: 9999;
+    pointer-events: none;
+    border: 1px solid rgba(139, 126, 200, 0.85);
+    background: rgba(139, 126, 200, 0.18);
+    border-radius: 0.75rem;
+    box-shadow: 0 0 0 1px rgba(139, 126, 200, 0.08) inset;
+}
+
+.selection-marquee.hidden {
+    display: none;
+}
+
+body.is-marquee-selecting {
+    user-select: none;
+}
+
 @media (max-width: 768px) {
 
     html,
