@@ -414,4 +414,26 @@ async function apiGetQuota(stashId, token) {
     return res.json();
 }
 
+async function apiGetSyncStatus(stashId, token) {
+    const res = await fetch(`/stash/${stashId}/sync-status`, {
+        method: "GET",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    if (res.status === 404) {
+        throw new Error("stash_deleted");
+    }
+
+    if (res.status === 401) {
+        throw new Error("access_lost");
+    }
+
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Request failed: ${res.status}`);
+    }
+
+    return await res.json();
+}
+
 // #endregion

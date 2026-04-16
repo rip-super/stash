@@ -200,7 +200,9 @@ function showJoinModal() {
             document.getElementById("modal-error").textContent = "Enter the full 6-character code.";
             return;
         }
-        joinByCode(code);
+
+        const { deviceType, deviceName } = getDeviceInfo();
+        joinByCode(code, { deviceName, deviceType });
     };
 
     document.getElementById("code-input").addEventListener("keydown", e => {

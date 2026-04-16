@@ -2,6 +2,7 @@
 
 const vaultData = { id: "root", name: "stash", type: "folder", children: [], modified: "" };
 const deviceData = [];
+const syncVersions = { metadata: null, devices: null, quota: null };
 
 const state = {
     path: [],
@@ -33,9 +34,13 @@ const state = {
     marqueeAdditive: false,
     marqueeBaseSelection: [],
     marqueeScrollRaf: 0,
+    marqueeJustFinished: false,
+    syncInterval: null,
+    syncedDeviceNewIds: new Set(),
+    syncedDeviceChangedIds: new Set(),
+    changedItemIds: new Set(),
+    fatalExitStarted: false,
 };
-
-let marqueeJustFinished = false;
 
 const FILE_CACHE_MAX_BYTES = 300 * 1024 * 1024;
 const ZSTD_MIN_SIZE = 32 * 1024;
@@ -275,6 +280,224 @@ function getUniqueChildName(folder, name) {
     }
 
     return nextName;
+}
+
+function collectItemIds(node, out = new Set()) {
+    for (const child of node.children || []) {
+        out.add(child.id);
+        if (child.type === "folder") collectItemIds(child, out);
+    }
+    return out;
+}
+
+function markSyncedDeviceChanges(previousDevices, nextDevices) {
+    state.syncedDeviceNewIds.clear();
+    state.syncedDeviceChangedIds.clear();
+
+    const previousMap = new Map(previousDevices.map(device => [device.id, device]));
+
+    for (const device of nextDevices) {
+        const previous = previousMap.get(device.id);
+
+        if (!previous) {
+            state.syncedDeviceNewIds.add(device.id);
+            continue;
+        }
+
+        if (previous.name !== device.name || previous.lastSeenLabel !== device.lastSeenLabel) {
+            state.syncedDeviceChangedIds.add(device.id);
+        }
+    }
+}
+
+function hasPendingUploads(node = vaultData) {
+    for (const child of node.children || []) {
+        if (child.type === "file" && child.pending) return true;
+        if (child.type === "folder" && hasPendingUploads(child)) return true;
+    }
+    return false;
+}
+
+function handleFatalExit(message) {
+    if (state.fatalExitStarted) return;
+    state.fatalExitStarted = true;
+
+    if (state.syncInterval) {
+        clearInterval(state.syncInterval);
+        state.syncInterval = null;
+    }
+
+    stopDeviceRefresh();
+
+    const toast = showToast(message);
+
+    setTimeout(() => {
+        toast.hide();
+
+        localStorage.removeItem(STORAGE_KEYS.stashId);
+        localStorage.removeItem(STORAGE_KEYS.stashKey);
+        localStorage.removeItem(STORAGE_KEYS.sessionToken);
+        localStorage.removeItem(STORAGE_KEYS.deviceId);
+
+        for (const blobId of [...state.fileCache.keys()]) {
+            removeCachedBlob(blobId);
+        }
+
+        window.location.replace("/");
+    }, 1500);
+}
+
+async function pollSyncStatus() {
+    const { stashId, token } = getStashContext();
+
+    try {
+        const versions = await apiGetSyncStatus(stashId, token);
+
+        if (syncVersions.metadata !== null && versions.metadata !== syncVersions.metadata) {
+            if (!hasPendingUploads()) {
+                const currentFolder = getCurrentFolder();
+                const previousVisibleItems = getVisibleItems(currentFolder.children || []);
+                const previousVisibleMap = new Map(previousVisibleItems.map(item => [item.id, item]));
+
+                const buffer = await apiGetMetadata(stashId, token);
+                if (buffer) {
+                    const nextVaultData = await decryptMetadata(
+                        buffer,
+                        fromBase64(localStorage.getItem(STORAGE_KEYS.stashKey))
+                    );
+
+                    const nextFolder = getFolderByPath(nextVaultData, state.path);
+                    const nextVisibleItems = state.searchQuery
+                        ? (nextFolder.children || []).filter(item => fuzzyMatch(item.name, state.searchQuery))
+                        : (nextFolder.children || []);
+                    const nextVisibleMap = new Map(nextVisibleItems.map(item => [item.id, item]));
+
+                    const removedIds = [];
+
+                    for (const [id, previous] of previousVisibleMap) {
+                        const next = nextVisibleMap.get(id);
+
+                        if (!next) {
+                            removedIds.push(id);
+                            continue;
+                        }
+
+                        if (
+                            previous.name !== next.name ||
+                            previous.modified !== next.modified ||
+                            previous.size !== next.size ||
+                            previous.pending !== next.pending ||
+                            previous.error !== next.error
+                        ) {
+                            state.changedItemIds.add(id);
+                        }
+                    }
+
+                    for (const [id] of nextVisibleMap) {
+                        if (!previousVisibleMap.has(id)) {
+                            state.newItemIds.add(id);
+                        }
+                    }
+
+                    for (const id of removedIds) {
+                        const row = listBody.querySelector(`.list-row[data-id="${id}"]`);
+                        if (row) row.classList.add("exiting");
+                    }
+
+                    if (removedIds.length) {
+                        await wait(180);
+                    }
+
+                    Object.assign(vaultData, nextVaultData);
+                }
+
+                await render();
+                await loadAndRenderQuota();
+                syncVersions.metadata = versions.metadata;
+            }
+        }
+
+        if (syncVersions.devices !== null && versions.devices !== syncVersions.devices) {
+            const previousDevices = deviceData.map(device => ({ ...device }));
+            const previousMap = new Map(previousDevices.map(device => [device.id, device]));
+
+            await loadDevices();
+
+            const nextDevices = deviceData.map(device => ({ ...device }));
+            const nextMap = new Map(nextDevices.map(device => [device.id, device]));
+
+            const removedIds = [];
+
+            state.syncedDeviceNewIds.clear();
+            state.syncedDeviceChangedIds.clear();
+
+            for (const [id, previous] of previousMap) {
+                const next = nextMap.get(id);
+
+                if (!next) {
+                    removedIds.push(id);
+                    continue;
+                }
+
+                if (
+                    previous.name !== next.name ||
+                    previous.lastSeenLabel !== next.lastSeenLabel
+                ) {
+                    state.syncedDeviceChangedIds.add(id);
+                }
+            }
+
+            for (const [id] of nextMap) {
+                if (!previousMap.has(id)) {
+                    state.syncedDeviceNewIds.add(id);
+                }
+            }
+
+            for (const id of removedIds) {
+                const row = deviceList.querySelector(`.device-row[data-id="${id}"]`);
+                if (row) row.classList.add("exiting");
+            }
+
+            const joinedDeviceWhileModalOpen =
+                !deviceConnectModal.classList.contains("hidden") &&
+                nextDevices.length > previousDevices.length;
+
+            if (removedIds.length) {
+                await wait(180);
+            }
+
+            if (joinedDeviceWhileModalOpen) {
+                stopDeviceRefresh();
+                closeModal(deviceConnectModal);
+                state.currentAccessCode = "";
+                const toast = showToast("Device connected.");
+                setTimeout(() => toast.hide(), 1800);
+            }
+
+            renderDevices();
+        }
+
+        if (syncVersions.quota !== null && versions.quota !== syncVersions.quota) {
+            await loadAndRenderQuota();
+        }
+
+        syncVersions.devices = versions.devices;
+        syncVersions.quota = versions.quota;
+
+        if (syncVersions.metadata === null) {
+            syncVersions.metadata = versions.metadata;
+        }
+    } catch (err) {
+        if (err.message === "stash_deleted") {
+            handleFatalExit("This stash was deleted");
+            return;
+        }
+
+        if (err.message === "access_lost") {
+            handleFatalExit("This device no longer has access to this stash");
+            return;
+        }
+    }
 }
 
 async function loadDevices() {
@@ -545,6 +768,22 @@ function decodeStoredFile(item, decryptedBuffer) {
     );
 }
 
+function getFolderByPath(root, path) {
+    let node = root;
+
+    for (const id of path) {
+        const next = (node.children || []).find(child => child.id === id && child.type === "folder");
+        if (!next) break;
+        node = next;
+    }
+
+    return node;
+}
+
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // #endregion
 
 // #region Icons
@@ -740,6 +979,7 @@ async function renderList() {
     listBody.innerHTML = ordered.map((item, index) => {
         const isRenaming = item.id === state.renamingItemId;
         const isNew = state.newItemIds.has(item.id);
+        const isChanged = state.changedItemIds.has(item.id);
 
         const nameContent = isRenaming
             ? `<input type="text" class="rename-input" id="rename-input-${item.id}"
@@ -757,7 +997,8 @@ async function renderList() {
                 ${state.draggedItemIds.includes(item.id) ? "dragging" : ""}
                 ${state.folderDropTargetId === item.id ? "drop-target" : ""}
                 ${isRenaming ? "renaming" : ""}
-                ${isNew ? "new-item" : ""}"
+                ${isNew ? "new-item" : ""}
+                ${isChanged ? "synced-changed" : ""}"
             data-id="${item.id}"
             data-type="${item.type}"
             draggable="${isRenaming ? "false" : "true"}"
@@ -773,6 +1014,7 @@ async function renderList() {
     }).join("");
 
     state.newItemIds.clear();
+    state.changedItemIds.clear();
 
     if (state.navDirection) {
         listBody.classList.remove("enter-forward", "enter-back");
@@ -1171,9 +1413,11 @@ function renderDevices() {
 
     deviceList.innerHTML = deviceData.map(device => {
         const isCurrentDevice = device.id === currentDeviceId;
+        const isNew = state.syncedDeviceNewIds.has(device.id);
+        const isChanged = state.syncedDeviceChangedIds.has(device.id);
 
         return `
-        <div class="device-row ${isCurrentDevice ? "is-current-device" : ""}" data-id="${device.id}">
+            <div class="device-row ${isCurrentDevice ? "is-current-device" : ""} ${isNew ? "new-item" : ""} ${isChanged ? "synced-changed" : ""}" data-id="${device.id}">
             <div class="device-icon" aria-hidden="true">${deviceIcon(device.type)}</div>
             <div class="device-info">
                 <div class="device-name-row">
@@ -1291,6 +1535,9 @@ function renderDevices() {
     if (deviceSummary) {
         deviceSummary.textContent = `${deviceData.length} device${deviceData.length === 1 ? "" : "s"} connected`;
     }
+
+    state.syncedDeviceNewIds.clear();
+    state.syncedDeviceChangedIds.clear();
 }
 
 async function render() {
@@ -1307,17 +1554,15 @@ async function loadAndRenderQuota() {
     const quotaValueEl = document.getElementById("quotaValue");
 
     try {
-        const { limit } = await apiGetQuota(stashId, token);
-        const { originalBytes } = getVaultFileTotals();
+        const { used, limit } = await apiGetQuota(stashId, token);
 
-        const pct = Math.min((originalBytes / limit) * 100, 100);
+        const pct = Math.min((used / limit) * 100, 100);
 
         quotaFillEl.style.width = pct + "%";
         quotaFillEl.classList.toggle("warn", pct >= 70 && pct < 90);
         quotaFillEl.classList.toggle("crit", pct >= 90);
 
-        quotaValueEl.textContent =
-            `${formatBytes(originalBytes)} / ${formatBytes(limit)}`;
+        quotaValueEl.textContent = `${formatBytes(used)} / ${formatBytes(limit)}`;
     } catch {
         quotaValueEl.textContent = "unavailable";
     }
@@ -2204,14 +2449,14 @@ document.addEventListener("mouseup", () => {
         state.marqueeScrollRaf = 0;
     }
 
-    marqueeJustFinished = true;
+    state.marqueeJustFinished = true;
     setTimeout(() => {
-        marqueeJustFinished = false;
+        state.marqueeJustFinished = false;
     }, 0);
 });
 
 dropzone.addEventListener("click", event => {
-    if (marqueeJustFinished) return;
+    if (state.marqueeJustFinished) return;
     if (event.target.closest(".list-row")) return;
     if (event.target.closest(".selection-card")) return;
     if (event.target.closest(".parent-dropzone")) return;
@@ -2222,7 +2467,7 @@ dropzone.addEventListener("click", event => {
 });
 
 listState.addEventListener("click", event => {
-    if (marqueeJustFinished) return;
+    if (state.marqueeJustFinished) return;
     if (event.target.closest(".list-row")) return;
 
     clearSelection();
@@ -2466,6 +2711,7 @@ listBody.addEventListener("mousedown", event => {
         return;
     }
 
+    state.syncInterval = setInterval(pollSyncStatus, 1000);
     renderDevices();
     await loadAndRenderQuota();
     await render();

@@ -16,6 +16,7 @@ interface StashRecord {
     storedQuotaUsed: number;
     pendingLogicalQuota?: number;
     createdAt: number;
+    versions: { metadata: number, devices: number, quota: number };
 }
 
 interface Registry {
@@ -78,17 +79,32 @@ setInterval(() => {
     });
 }, TEMP_CLEANUP_INTERVAL_MS);
 
-function getSession(c: Context, id: string) {
+async function getSession(c: Context, id: string) {
     const token = c.req.header("Authorization")?.slice(7);
     const session = sessions.get(token ?? "");
     if (!session) return null;
     if (session.stashId !== id) return null;
-    if (Date.now() > session.expiresAt) return null;
+    if (Date.now() > session.expiresAt) {
+        sessions.delete(token ?? "");
+        return null;
+    }
+
+    const path = join("./stashes", id, "devices.json");
+    const data = existsSync(path)
+        ? JSON.parse(await readFile(path, "utf-8")) as { devices: Device[] }
+        : { devices: [] };
+
+    const stillExists = data.devices.some(device => device.id === session.deviceId);
+    if (!stillExists) {
+        sessions.delete(token ?? "");
+        return null;
+    }
+
     return session;
 }
 
-function auth(c: Context, id: string) {
-    return !!getSession(c, id);
+async function auth(c: Context, id: string) {
+    return !!(await getSession(c, id));
 }
 
 async function getDirectorySize(path: string): Promise<number> {
@@ -184,6 +200,11 @@ async function writeBlobIndex(stashId: string, index: BlobIndex) {
     await writeFile(path, JSON.stringify(index, null, 4));
 }
 
+function bumpVersion(stash: StashRecord, key: "metadata" | "devices" | "quota") {
+    stash.versions ??= { metadata: 0, devices: 0, quota: 0 };
+    stash.versions[key] = (stash.versions[key] ?? 0) + 1;
+}
+
 app.post("/stash", async c => {
     const { id, authVerifier, recoveryId, recovery, device } = await c.req.json<{
         id: string,
@@ -212,6 +233,7 @@ app.post("/stash", async c => {
         storedQuotaUsed: 0,
         pendingLogicalQuota: 0,
         createdAt: Date.now(),
+        versions: { metadata: 0, devices: 0, quota: 0 },
     };
 
     await writeFile(join("./stashes", "registry.json"), JSON.stringify(reg, null, 4));
@@ -232,7 +254,7 @@ app.post("/stash", async c => {
 
 app.delete("/stash/:id", async c => {
     const id = c.req.param("id");
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
@@ -360,13 +382,16 @@ app.post("/recovery/:recoveryId/device", async c => {
     data.devices.unshift(device);
     await writeFile(path, JSON.stringify(data, null, 4));
 
+    bumpVersion(stash, "devices");
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+
     return c.json({ stashId: stash.id, device }, 201);
 });
 
 app.get("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const path = join("./stashes", id, "metadata.bin");
     if (!existsSync(path)) return c.json({ error: "No metadata yet" }, 404);
@@ -378,17 +403,24 @@ app.get("/stash/:id/metadata", async c => {
 app.put("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
+
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
 
     const data = await c.req.arrayBuffer();
     await writeFile(join("./stashes", id, "metadata.bin"), Buffer.from(data));
+
+    bumpVersion(stash, "metadata");
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
 });
 
 app.post("/stash/:id/blob/start", async c => {
     const id = c.req.param("id");
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
     const stash = reg.stashes[id];
@@ -442,7 +474,7 @@ app.post("/stash/:id/blob/start", async c => {
 
 app.put("/stash/:id/blob/:blobId/chunk/:index", async c => {
     const id = c.req.param("id");
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const blobId = c.req.param("blobId");
     const index = parseInt(c.req.param("index"));
@@ -472,7 +504,7 @@ app.put("/stash/:id/blob/:blobId/chunk/:index", async c => {
 
 app.post("/stash/:id/blob/:blobId/complete", async c => {
     const id = c.req.param("id");
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const blobId = c.req.param("blobId");
     const { chunkCount } = await c.req.json<{ chunkCount: number }>();
@@ -503,10 +535,7 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
 
     if (!Number.isFinite(originalSize) || originalSize < 0) {
         if (Number.isFinite(reservedLogicalSize) && reservedLogicalSize > 0) {
-            stash.pendingLogicalQuota = Math.max(
-                0,
-                (stash.pendingLogicalQuota || 0) - reservedLogicalSize
-            );
+            stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
             await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
         }
 
@@ -523,10 +552,7 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
 
     const totalUsed = await getDirectorySize(STASHES_ROOT);
     if (totalUsed > MAX_TOTAL_STORAGE) {
-        stash.pendingLogicalQuota = Math.max(
-            0,
-            (stash.pendingLogicalQuota || 0) - reservedLogicalSize
-        );
+        stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
         await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
         await rm(tempDir, { recursive: true, force: true });
         return c.json({ error: "Server storage is full" }, 507);
@@ -562,10 +588,7 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
         dest.destroy();
         await unlink(blobPath).catch(() => { });
 
-        stash.pendingLogicalQuota = Math.max(
-            0,
-            (stash.pendingLogicalQuota || 0) - reservedLogicalSize
-        );
+        stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
         await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
         await rm(tempDir, { recursive: true, force: true });
@@ -585,12 +608,10 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
     blobIndex[blobId] = { originalSize, storedSize };
     await writeBlobIndex(id, blobIndex);
 
-    stash.pendingLogicalQuota = Math.max(
-        0,
-        (stash.pendingLogicalQuota || 0) - reservedLogicalSize
-    );
+    stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
     stash.logicalQuotaUsed += originalSize;
     stash.storedQuotaUsed += storedSize;
+    bumpVersion(stash, "quota");
 
     await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
@@ -599,7 +620,7 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
 
 app.get("/stash/:id/blob/:blobId", async c => {
     const id = c.req.param("id");
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const blobPath = join("./stashes", id, "blobs", c.req.param("blobId"));
     if (!existsSync(blobPath)) return c.json({ error: "Blob not found" }, 404);
@@ -618,7 +639,7 @@ app.get("/stash/:id/blob/:blobId", async c => {
 app.delete("/stash/:id/blob/:blobId", async c => {
     const id = c.req.param("id");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const blobId = c.req.param("blobId");
     const path = join(STASHES_ROOT, id, "blobs", blobId);
@@ -635,8 +656,13 @@ app.delete("/stash/:id/blob/:blobId", async c => {
     await writeBlobIndex(id, blobIndex);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
-    reg.stashes[id].logicalQuotaUsed = Math.max(0, reg.stashes[id].logicalQuotaUsed - originalSize);
-    reg.stashes[id].storedQuotaUsed = Math.max(0, reg.stashes[id].storedQuotaUsed - storedSize);
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    stash.logicalQuotaUsed = Math.max(0, stash.logicalQuotaUsed - originalSize);
+    stash.storedQuotaUsed = Math.max(0, stash.storedQuotaUsed - storedSize);
+    bumpVersion(stash, "quota");
+
     await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
@@ -645,7 +671,7 @@ app.delete("/stash/:id/blob/:blobId", async c => {
 app.delete("/stash/:id/blobs", async c => {
     const id = c.req.param("id");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const { blobIds } = await c.req.json<{ blobIds: string[] }>();
 
@@ -676,8 +702,13 @@ app.delete("/stash/:id/blobs", async c => {
     await writeBlobIndex(id, blobIndex);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
-    reg.stashes[id].logicalQuotaUsed = Math.max(0, reg.stashes[id].logicalQuotaUsed - freedOriginalBytes);
-    reg.stashes[id].storedQuotaUsed = Math.max(0, reg.stashes[id].storedQuotaUsed - freedStoredBytes);
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    stash.logicalQuotaUsed = Math.max(0, stash.logicalQuotaUsed - freedOriginalBytes);
+    stash.storedQuotaUsed = Math.max(0, stash.storedQuotaUsed - freedStoredBytes);
+    bumpVersion(stash, "quota");
+
     await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
@@ -686,7 +717,7 @@ app.delete("/stash/:id/blobs", async c => {
 app.get("/stash/:id/devices", async c => {
     const id = c.req.param("id");
 
-    const session = getSession(c, id);
+    const session = await getSession(c, id);
     if (!session) return c.json({ error: "Unauthorized" }, 401);
 
     const path = join("./stashes", id, "devices.json");
@@ -702,7 +733,7 @@ app.get("/stash/:id/devices", async c => {
 app.post("/stash/:id/devices", async c => {
     const id = c.req.param("id");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const { name, type } = await c.req.json<{
         name: string,
@@ -734,6 +765,13 @@ app.post("/stash/:id/devices", async c => {
     data.devices.unshift(device);
     await writeFile(path, JSON.stringify(data, null, 4));
 
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    bumpVersion(stash, "devices");
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+
     return c.json({ device }, 201);
 });
 
@@ -741,7 +779,7 @@ app.patch("/stash/:id/devices/:deviceId", async c => {
     const id = c.req.param("id");
     const deviceId = c.req.param("deviceId");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const { name } = await c.req.json<{ name: string }>();
     if (!name || typeof name !== "string") return c.json({ error: "Missing device name" }, 400);
@@ -762,6 +800,14 @@ app.patch("/stash/:id/devices/:deviceId", async c => {
     device.name = name.trim();
 
     await writeFile(path, JSON.stringify(data, null, 4));
+
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    bumpVersion(stash, "devices");
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+
     return c.json({ device });
 });
 
@@ -770,7 +816,7 @@ app.delete<"/stash/:id/devices/:deviceId">("/stash/:id/devices/:deviceId", async
     const id = c.req.param("id");
     const deviceId = c.req.param("deviceId");
 
-    const session = getSession(c, id);
+    const session = await getSession(c, id);
     if (!session) return c.json({ error: "Unauthorized" }, 401);
 
     const path = join("./stashes", id, "devices.json");
@@ -797,13 +843,21 @@ app.delete<"/stash/:id/devices/:deviceId">("/stash/:id/devices/:deviceId", async
     }
 
     await writeFile(path, JSON.stringify(data, null, 4));
+
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    bumpVersion(stash, "devices");
+    await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+
     return c.json({ ok: true });
 });
 
 app.get("/stash/:id/quota", async c => {
     const id = c.req.param("id");
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
     if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
@@ -813,7 +867,7 @@ app.get("/stash/:id/quota", async c => {
 
 app.post("/stash/:id/access-code", async c => {
     const id = c.req.param("id");
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const body = await c.req.json<{
         device?: { name: string, type: "desktop" | "mobile" | "tablet" | "server" }
@@ -840,7 +894,7 @@ app.put("/stash/:id/access-code/:code", async c => {
     const id = c.req.param("id");
     const code = c.req.param("code").toUpperCase();
 
-    if (!auth(c, id)) return c.json({ error: "Unauthorized" }, 401);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const entry = accessCodes.get(code);
     if (!entry || entry.stashId !== id || Date.now() > entry.expiresAt) {
@@ -908,9 +962,27 @@ app.post("/stash/join/:token", async c => {
 
         data.devices.unshift(joinedDevice);
         await writeFile(path, JSON.stringify(data, null, 4));
+
+        const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+        const stash = reg.stashes[stashId];
+        if (stash) {
+            bumpVersion(stash, "devices");
+            await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+        }
     }
 
     return c.json({ stashId, transfer, device: joinedDevice });
+});
+
+app.get("/stash/:id/sync-status", async c => {
+    const id = c.req.param("id");
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
+
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    const stash = reg.stashes[id];
+    if (!stash) return c.json({ error: "Not found" }, 404);
+
+    return c.json(stash.versions ?? { metadata: 0, devices: 0, quota: 0 });
 });
 
 app.use("/*", serveStatic({ root: "./frontend" }));
