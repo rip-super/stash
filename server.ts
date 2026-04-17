@@ -1,3 +1,5 @@
+// #region Imports
+
 import { Hono, Context } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -8,6 +10,10 @@ import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 
+// #endregion
+
+// #region Types
+
 interface StashRecord {
     id: string;
     authVerifier: string;
@@ -17,6 +23,7 @@ interface StashRecord {
     pendingLogicalQuota?: number;
     createdAt: number;
     versions: { metadata: number, devices: number, quota: number };
+    lastActivityAt?: number;
 }
 
 interface Registry {
@@ -49,6 +56,10 @@ interface BlobIndexEntry {
 
 type BlobIndex = Record<string, BlobIndexEntry>;
 
+// #endregion
+
+// #region Constants
+
 const app = new Hono();
 
 const challenges = new Map<string, { nonce: string, expiresAt: number }>();
@@ -61,23 +72,10 @@ const STASHES_ROOT = "./stashes";
 const REGISTRY_PATH = join(STASHES_ROOT, "registry.json");
 
 const MAX_TOTAL_STORAGE = 50 * 1024 * 1024 * 1024;
-const TEMP_UPLOAD_TTL_MS = 60 * 60 * 1000;
-const TEMP_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 
-await mkdir(STASHES_ROOT, { recursive: true });
-if (!existsSync(REGISTRY_PATH)) {
-    await writeFile(REGISTRY_PATH, JSON.stringify({ stashes: {} }, null, 4));
-}
+// #endregion
 
-await cleanupExpiredTempUploads().catch(error => {
-    console.error("Initial temp cleanup failed:", error);
-});
-
-setInterval(() => {
-    cleanupExpiredTempUploads().catch(error => {
-        console.error("Temp cleanup failed:", error);
-    });
-}, TEMP_CLEANUP_INTERVAL_MS);
+// #region Helpers
 
 async function getSession(c: Context, id: string) {
     const token = c.req.header("Authorization")?.slice(7);
@@ -168,7 +166,7 @@ async function cleanupExpiredTempUploads() {
                 createdAt = info?.mtimeMs || 0;
             }
 
-            if (createdAt && Date.now() - createdAt > TEMP_UPLOAD_TTL_MS) {
+            if (createdAt && Date.now() - createdAt > 60 * 60 * 1000) {
                 const stash = reg.stashes[stashId];
 
                 if (stash && reservedLogicalSize > 0) {
@@ -189,6 +187,31 @@ async function cleanupExpiredTempUploads() {
     }
 }
 
+async function cleanupStaleStashes() {
+    const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+    const now = Date.now();
+    const THREE_DAYS = 3 * 24 * 60 * 60 * 1000;
+    const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+    let dirty = false;
+
+    for (const [id, stash] of Object.entries(reg.stashes)) {
+        if (stash.logicalQuotaUsed > 0) continue;
+
+        const hadActivity = (stash.versions?.metadata ?? 0) > 0 || (stash.versions?.quota ?? 0) > 0;
+        const refTime = stash.lastActivityAt ?? stash.createdAt ?? now;
+        const threshold = hadActivity ? FOURTEEN_DAYS : THREE_DAYS;
+
+        if (now - refTime > threshold) {
+            delete reg.stashes[id];
+            await rm(join(STASHES_ROOT, id), { recursive: true, force: true });
+            console.log(`Reaped stale stash ${id} (${hadActivity ? "idle" : "never used"})`);
+            dirty = true;
+        }
+    }
+
+    if (dirty) await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+}
+
 async function readBlobIndex(stashId: string): Promise<BlobIndex> {
     const path = join(STASHES_ROOT, stashId, "blobs", "index.json");
     if (!existsSync(path)) return {};
@@ -204,6 +227,10 @@ function bumpVersion(stash: StashRecord, key: "metadata" | "devices" | "quota") 
     stash.versions ??= { metadata: 0, devices: 0, quota: 0 };
     stash.versions[key] = (stash.versions[key] ?? 0) + 1;
 }
+
+// #endregion
+
+// #region Routes
 
 app.post("/stash", async c => {
     const { id, authVerifier, recoveryId, recovery, device } = await c.req.json<{
@@ -413,6 +440,7 @@ app.put("/stash/:id/metadata", async c => {
     await writeFile(join("./stashes", id, "metadata.bin"), Buffer.from(data));
 
     bumpVersion(stash, "metadata");
+    stash.lastActivityAt = Date.now();
     await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
 
     return c.json({ ok: true });
@@ -611,6 +639,7 @@ app.post("/stash/:id/blob/:blobId/complete", async c => {
     stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
     stash.logicalQuotaUsed += originalSize;
     stash.storedQuotaUsed += storedSize;
+    stash.lastActivityAt = Date.now();
     bumpVersion(stash, "quota");
 
     await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
@@ -987,6 +1016,32 @@ app.get("/stash/:id/sync-status", async c => {
 
 app.use("/*", serveStatic({ root: "./frontend" }));
 
+// #endregion
+
+// #region Startup
+
+await mkdir(STASHES_ROOT, { recursive: true });
+if (!existsSync(REGISTRY_PATH)) {
+    await writeFile(REGISTRY_PATH, JSON.stringify({ stashes: {} }, null, 4));
+}
+
+await cleanupExpiredTempUploads().catch(error => {
+    console.error("Initial temp cleanup failed:", error);
+});
+
+setInterval(() => {
+    cleanupExpiredTempUploads().catch(error => {
+        console.error("Temp cleanup failed:", error);
+    });
+}, 10 * 60 * 1000);
+
+await cleanupStaleStashes().catch(err => console.error("Initial stash reap failed:", err));
+setInterval(() => {
+    cleanupStaleStashes().catch(err => console.error("Stash reap failed:", err));
+}, 6 * 60 * 60 * 1000);
+
 serve({ fetch: app.fetch, port: 6003 }, info => {
     console.log(`Listening at http://localhost:${info.port}`);
 });
+
+// #endregion

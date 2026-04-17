@@ -246,7 +246,7 @@ body::before {
     background: rgba(20, 18, 30, 0.95);
     border: 1px solid rgba(139, 126, 200, 0.25);
     border-radius: 1.25rem;
-    padding: 2rem 2.25rem;
+    padding: 2.25rem 2.5rem;
     width: 100%;
     max-width: 400px;
     position: relative;
@@ -260,7 +260,9 @@ body::before {
     font-weight: 700;
     letter-spacing: -0.02em;
     color: var(--text-primary);
-    margin-bottom: 0.35rem;
+    margin-bottom: 1rem;
+    margin-top: 1rem;
+    padding-right: 1.75rem;
 }
 
 .modal-sub {

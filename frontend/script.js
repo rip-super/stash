@@ -1,14 +1,16 @@
 const [createBtn, joinBtn] = document.querySelectorAll(".action");
+let pendingStashId = null;
+let pendingStashKeyBytes = null;
 
 function openModal(html) {
-    closeModal();
+    closeModal(true);
 
     const overlay = document.createElement("div");
 
     overlay.className = "modal-overlay";
     overlay.id = "modal-overlay";
     overlay.innerHTML = `<div class="modal">${html}<button class="modal-close">&#10005;</button></div>`;
-    overlay.querySelector(".modal-close").onclick = closeModal;
+    overlay.querySelector(".modal-close").onclick = () => closeModal();
     overlay.addEventListener("mousedown", e => { overlay._dragStartedInside = e.target !== overlay; });
     overlay.addEventListener("click", e => {
         if (e.target === overlay && !overlay._dragStartedInside) closeModal();
@@ -19,7 +21,39 @@ function openModal(html) {
     return overlay.querySelector(".modal");
 }
 
-function closeModal() {
+function closeModal(silent = false) {
+    if (silent instanceof Event) silent = false;
+
+    if (!silent && pendingStashId) {
+        const id = pendingStashId;
+        const keyBytes = pendingStashKeyBytes;
+        pendingStashId = null;
+        pendingStashKeyBytes = null;
+
+        const clear = () => {
+            localStorage.removeItem(STORAGE_KEYS.stashId);
+            localStorage.removeItem(STORAGE_KEYS.stashKey);
+            localStorage.removeItem(STORAGE_KEYS.deviceId);
+            localStorage.removeItem(STORAGE_KEYS.sessionToken);
+        };
+
+        if (keyBytes) {
+            authenticate(id, keyBytes)
+                .then(() =>
+                    fetch(`/stash/${id}`, {
+                        method: "DELETE",
+                        headers: {
+                            Authorization: `Bearer ${localStorage.getItem(STORAGE_KEYS.sessionToken)}`
+                        }
+                    })
+                )
+                .then(clear)
+                .catch(clear);
+        } else {
+            clear();
+        }
+    }
+
     const overlay = document.getElementById("modal-overlay");
     if (!overlay) return;
     overlay.classList.add("closing");
@@ -56,14 +90,15 @@ async function createStash() {
             device: { name: deviceName, type: deviceType },
         });
 
-        localStorage.setItem(STORAGE_KEYS.stashId, stashId);
-        localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(stashKeyBytes));
-        if (device?.id) {
-            localStorage.setItem(STORAGE_KEYS.deviceId, device.id);
-        }
+        pendingStashId = stashId;
+        pendingStashKeyBytes = stashKeyBytes;
 
         localStorage.setItem(STORAGE_KEYS.stashId, stashId);
         localStorage.setItem(STORAGE_KEYS.stashKey, toBase64(stashKeyBytes));
+
+        if (device?.id) {
+            localStorage.setItem(STORAGE_KEYS.deviceId, device.id);
+        }
 
         showRecoveryPhrase(phrase);
     } catch (err) {
@@ -77,18 +112,26 @@ async function createStash() {
 function showRecoveryPhrase(phrase) {
     openModal(`
         <div class="modal-title">Save your recovery phrase</div>
-        <div class="modal-sub" style="color:#e09a6c">
-            Write this down. It's the only way to recover your stash
-            if you lose all your devices. It will not be shown again.
+        <div style="
+            background: rgba(224,154,108,0.08); border: 1px solid rgba(224,154,108,0.3);
+            border-radius: 0.65rem; padding: 1rem 1.1rem; margin-bottom: 1.25rem;
+            color: #e09a6c; font-size: 0.87rem; line-height: 1.6;
+        ">
+            <div style="font-weight:600; font-size:0.92rem; color:#eab97a;">
+                Write this down somewhere safe.
+            </div>
+            <br>
+            This is the <strong style="color:#eab97a">only way to recover your stash</strong> if you lose access to all your devices.<br><br>
+            <strong style="color:#eab97a">It will not be shown again.</strong>
         </div>
         <div id="phrase-box" style="
-            display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem;
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.55rem;
             background: rgba(139,126,200,0.07); border: 1px solid rgba(139,126,200,0.2);
-            border-radius: 0.65rem; padding: 1rem; margin-bottom: 1rem;
+            border-radius: 0.65rem; padding: 1.1rem 1.25rem; margin-bottom: 1.25rem;
         ">${phrase.split(" ").map(w => `
             <span style="
                 font-family: monospace; font-size: 0.88rem;
-                color: #c4b8e8; text-align: center; padding: 0.25rem 0;
+                color: #c4b8e8; text-align: center; padding: 0.35rem 0;
             ">${w}</span>
         `).join("")}</div>
         <button class="modal-btn" id="copy-btn">Copy phrase</button>
@@ -105,7 +148,30 @@ function showRecoveryPhrase(phrase) {
         }, 2500);
     };
 
-    document.getElementById("confirm-btn").onclick = async () => {
+    const confirmBtn = document.getElementById("confirm-btn");
+    let countdown = 5;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = `I've saved it, continue (${countdown}s)`;
+    confirmBtn.style.opacity = "0.45";
+    confirmBtn.style.cursor = "not-allowed";
+
+    const tick = setInterval(() => {
+        countdown--;
+        if (countdown <= 0) {
+            clearInterval(tick);
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "I've saved it, continue";
+            confirmBtn.style.opacity = "";
+            confirmBtn.style.cursor = "";
+        } else {
+            confirmBtn.textContent = `I've saved it, continue (${countdown}s)`;
+        }
+    }, 1000);
+
+    confirmBtn.onclick = async () => {
+        pendingStashId = null;
+        pendingStashKeyBytes = null;
+
         closeModal();
 
         const stashId = localStorage.getItem(STORAGE_KEYS.stashId);
