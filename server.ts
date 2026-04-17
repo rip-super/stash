@@ -4,11 +4,9 @@ import { Hono, Context } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { readFile, writeFile, mkdir, stat, unlink, rm, readdir } from "fs/promises";
-import { existsSync, createReadStream, createWriteStream } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
-import { Readable } from "stream";
-import { pipeline } from "stream/promises";
 
 // #endregion
 
@@ -244,7 +242,17 @@ app.post("/stash", async c => {
         }
     }>();
 
-    if (!id || !authVerifier || !recoveryId || !recovery) return c.json({ error: "Missing required fields" }, 400);
+    if (!id || !authVerifier || !recoveryId || !recovery) {
+        return c.json({ error: "Missing required fields" }, 400);
+    }
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
+    if (typeof recoveryId !== "string" || !/^[a-f0-9]{32}$/i.test(recoveryId)) {
+        return c.json({ error: "Invalid recovery id" }, 400);
+    }
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     if (reg.stashes[id]) return c.json({ error: "Stash already exists" }, 409);
@@ -281,6 +289,11 @@ app.post("/stash", async c => {
 
 app.delete("/stash/:id", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
@@ -297,6 +310,10 @@ app.delete("/stash/:id", async c => {
 app.get("/stash/:id/challenge", async c => {
     const id = c.req.param("id");
 
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
 
@@ -308,6 +325,10 @@ app.get("/stash/:id/challenge", async c => {
 
 app.post("/stash/:id/auth", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
@@ -321,7 +342,17 @@ app.post("/stash/:id/auth", async c => {
     const { response, deviceId } = await c.req.json<{ response: string, deviceId?: string }>();
     const expected = createHmac("sha256", Buffer.from(reg.stashes[id].authVerifier, "base64")).update(challenge.nonce).digest("hex");
 
-    if (!timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(response, "hex"))) {
+    if (typeof response !== "string" || !/^[a-f0-9]{64}$/i.test(response)) {
+        return c.json({ error: "Invalid auth response" }, 401);
+    }
+
+    const expectedBuf = Buffer.from(expected, "hex");
+    const responseBuf = Buffer.from(response, "hex");
+
+    if (
+        expectedBuf.length !== responseBuf.length ||
+        !timingSafeEqual(expectedBuf, responseBuf)
+    ) {
         return c.json({ error: "Invalid auth response" }, 401);
     }
 
@@ -352,6 +383,11 @@ app.post("/stash/:id/auth", async c => {
 
 app.get("/stash/:id/recovery", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     if (!reg.stashes[id]) return c.json({ error: "Not found" }, 404);
 
@@ -361,6 +397,11 @@ app.get("/stash/:id/recovery", async c => {
 
 app.get("/recovery/:recoveryId", async c => {
     const recoveryId = c.req.param("recoveryId");
+
+    if (typeof recoveryId !== "string" || !/^[a-f0-9]{32}$/i.test(recoveryId)) {
+        return c.json({ error: "Invalid recovery id" }, 400);
+    }
+
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     const stash = Object.values(reg.stashes).find(s => s.recoveryId === recoveryId);
     if (!stash) return c.json({ error: "Not found" }, 404);
@@ -371,6 +412,10 @@ app.get("/recovery/:recoveryId", async c => {
 
 app.post("/recovery/:recoveryId/device", async c => {
     const recoveryId = c.req.param("recoveryId");
+
+    if (typeof recoveryId !== "string" || !/^[a-f0-9]{32}$/i.test(recoveryId)) {
+        return c.json({ error: "Invalid recovery id" }, 400);
+    }
 
     const reg = JSON.parse(await readFile(join("./stashes", "registry.json"), "utf-8")) as Registry;
     const stash = Object.values(reg.stashes).find(s => s.recoveryId === recoveryId);
@@ -418,6 +463,10 @@ app.post("/recovery/:recoveryId/device", async c => {
 app.get("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
 
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const path = join("./stashes", id, "metadata.bin");
@@ -429,6 +478,10 @@ app.get("/stash/:id/metadata", async c => {
 
 app.put("/stash/:id/metadata", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
 
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
@@ -448,6 +501,11 @@ app.put("/stash/:id/metadata", async c => {
 
 app.post("/stash/:id/blob/start", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
@@ -485,202 +543,165 @@ app.post("/stash/:id/blob/start", async c => {
             JSON.stringify({
                 createdAt: Date.now(),
                 originalSize,
-                reservedLogicalSize: originalSize,
             }, null, 4)
         );
-    } catch (error) {
-        stash.pendingLogicalQuota = Math.max(
-            0,
-            (stash.pendingLogicalQuota || 0) - originalSize
-        );
-        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
-        throw error;
-    }
 
-    return c.json({ blobId }, 201);
+        return c.json({ blobId });
+    } catch {
+        const regRollback = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
+        const stashRollback = regRollback.stashes[id];
+        if (stashRollback) {
+            stashRollback.pendingLogicalQuota = Math.max(0, (stashRollback.pendingLogicalQuota || 0) - originalSize);
+            await writeFile(REGISTRY_PATH, JSON.stringify(regRollback, null, 4));
+        }
+
+        return c.json({ error: "Failed to start blob upload" }, 500);
+    }
 });
 
 app.put("/stash/:id/blob/:blobId/chunk/:index", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const blobId = c.req.param("blobId");
-    const index = parseInt(c.req.param("index"));
-    if (isNaN(index) || index < 0) return c.json({ error: "Invalid chunk index" }, 400);
+    const index = Number(c.req.param("index"));
 
-    const tempDir = join(STASHES_ROOT, id, "temp", blobId);
-    if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
-
-    const chunkPath = join(tempDir, String(index).padStart(6, "0"));
-    const existingChunkSize = (await stat(chunkPath).catch(() => null))?.size || 0;
-
-    const contentLength = parseInt(c.req.header("Content-Length") || "0");
-    const totalUsed = await getDirectorySize(STASHES_ROOT);
-    const projectedTotalUsed = totalUsed + Math.max(0, contentLength - existingChunkSize);
-
-    if (projectedTotalUsed > MAX_TOTAL_STORAGE) {
-        return c.json({ error: "Server storage is full" }, 507);
+    if (!/^[a-f0-9]{32}$/i.test(blobId)) {
+        return c.json({ error: "Invalid blob id" }, 400);
     }
 
-    await pipeline(
-        Readable.fromWeb(c.req.raw.body as any),
-        createWriteStream(chunkPath)
-    );
+    if (!Number.isInteger(index) || index < 0) {
+        return c.json({ error: "Invalid chunk index" }, 400);
+    }
+
+    const tempDir = join(STASHES_ROOT, id, "temp", blobId);
+    if (!existsSync(tempDir)) {
+        return c.json({ error: "Upload session not found" }, 404);
+    }
+
+    const chunk = Buffer.from(await c.req.arrayBuffer());
+    await writeFile(join(tempDir, `${index}.part`), chunk);
 
     return c.json({ ok: true });
 });
 
 app.post("/stash/:id/blob/:blobId/complete", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const blobId = c.req.param("blobId");
-    const { chunkCount } = await c.req.json<{ chunkCount: number }>();
 
-    if (!Number.isInteger(chunkCount) || chunkCount <= 0) {
-        return c.json({ error: "Invalid chunkCount" }, 400);
+    if (!/^[a-f0-9]{32}$/i.test(blobId)) {
+        return c.json({ error: "Invalid blob id" }, 400);
     }
 
     const tempDir = join(STASHES_ROOT, id, "temp", blobId);
-    if (!existsSync(tempDir)) return c.json({ error: "Upload session not found" }, 404);
+    if (!existsSync(tempDir)) {
+        return c.json({ error: "Upload session not found" }, 404);
+    }
+
+    const sessionPath = join(tempDir, "session.json");
+    if (!existsSync(sessionPath)) {
+        return c.json({ error: "Missing upload session metadata" }, 404);
+    }
+
+    const session = JSON.parse(await readFile(sessionPath, "utf-8")) as {
+        createdAt: number;
+        originalSize: number;
+    };
+
+    const files = (await readdir(tempDir))
+        .filter(name => /^\d+\.part$/.test(name))
+        .sort((a, b) => Number(a.split(".")[0]) - Number(b.split(".")[0]));
+
+    if (!files.length) {
+        return c.json({ error: "No chunks uploaded" }, 400);
+    }
+
+    const chunks = await Promise.all(files.map(file => readFile(join(tempDir, file))));
+    const blob = Buffer.concat(chunks);
+
+    const blobPath = join(STASHES_ROOT, id, "blobs", blobId);
+    await mkdir(join(STASHES_ROOT, id, "blobs"), { recursive: true });
+    await writeFile(blobPath, blob);
+
+    const blobIndex = await readBlobIndex(id);
+    blobIndex[blobId] = {
+        originalSize: session.originalSize,
+        storedSize: blob.length,
+    };
+    await writeBlobIndex(id, blobIndex);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
     const stash = reg.stashes[id];
     if (!stash) return c.json({ error: "Not found" }, 404);
 
-    const session = await readFile(join(tempDir, "session.json"), "utf-8")
-        .then(text => JSON.parse(text) as {
-            createdAt?: number;
-            originalSize?: number;
-            reservedLogicalSize?: number;
-        })
-        .catch(() => null);
-
-    const originalSize = Number(session?.originalSize);
-    const reservedLogicalSize = Number(
-        session?.reservedLogicalSize ?? session?.originalSize
-    );
-
-    if (!Number.isFinite(originalSize) || originalSize < 0) {
-        if (Number.isFinite(reservedLogicalSize) && reservedLogicalSize > 0) {
-            stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
-            await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
-        }
-
-        await rm(tempDir, { recursive: true, force: true });
-        return c.json({ error: "Missing originalSize" }, 400);
-    }
-
-    if (!Number.isFinite(reservedLogicalSize) || reservedLogicalSize < 0) {
-        stash.pendingLogicalQuota = Math.max(0, stash.pendingLogicalQuota || 0);
-        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
-        await rm(tempDir, { recursive: true, force: true });
-        return c.json({ error: "Invalid reservedLogicalSize" }, 400);
-    }
-
-    const totalUsed = await getDirectorySize(STASHES_ROOT);
-    if (totalUsed > MAX_TOTAL_STORAGE) {
-        stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
-        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
-        await rm(tempDir, { recursive: true, force: true });
-        return c.json({ error: "Server storage is full" }, 507);
-    }
-
-    const blobPath = join(STASHES_ROOT, id, "blobs", blobId);
-    const dest = createWriteStream(blobPath);
-
-    try {
-        await new Promise<void>((resolve, reject) => {
-            dest.once("error", reject);
-
-            (async () => {
-                for (let i = 0; i < chunkCount; i++) {
-                    const chunkPath = join(tempDir, String(i).padStart(6, "0"));
-
-                    if (!existsSync(chunkPath)) {
-                        throw new Error(`Missing chunk ${i}`);
-                    }
-
-                    await new Promise<void>((chunkResolve, chunkReject) => {
-                        const src = createReadStream(chunkPath);
-                        src.once("error", chunkReject);
-                        src.once("end", chunkResolve);
-                        src.pipe(dest, { end: false });
-                    });
-                }
-
-                dest.end((err: Error | null | undefined) => err ? reject(err) : resolve());
-            })().catch(reject);
-        });
-    } catch (error) {
-        dest.destroy();
-        await unlink(blobPath).catch(() => { });
-
-        stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
-        await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
-
-        await rm(tempDir, { recursive: true, force: true });
-
-        if (error instanceof Error && error.message.startsWith("Missing chunk ")) {
-            return c.json({ error: error.message }, 400);
-        }
-
-        throw error;
-    }
-
-    await rm(tempDir, { recursive: true, force: true });
-
-    const { size: storedSize } = await stat(blobPath);
-
-    const blobIndex = await readBlobIndex(id);
-    blobIndex[blobId] = { originalSize, storedSize };
-    await writeBlobIndex(id, blobIndex);
-
-    stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - reservedLogicalSize);
-    stash.logicalQuotaUsed += originalSize;
-    stash.storedQuotaUsed += storedSize;
+    stash.pendingLogicalQuota = Math.max(0, (stash.pendingLogicalQuota || 0) - session.originalSize);
+    stash.logicalQuotaUsed += session.originalSize;
+    stash.storedQuotaUsed += blob.length;
     stash.lastActivityAt = Date.now();
     bumpVersion(stash, "quota");
 
     await writeFile(REGISTRY_PATH, JSON.stringify(reg, null, 4));
+    await rm(tempDir, { recursive: true, force: true });
 
-    return c.json({ blobId });
+    return c.json({ ok: true, blobId });
 });
 
 app.get("/stash/:id/blob/:blobId", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
+
+    const blobId = c.req.param("blobId");
+    if (!/^[a-f0-9]{32}$/i.test(blobId)) {
+        return c.json({ error: "Invalid blob id" }, 400);
+    }
 
     const blobPath = join("./stashes", id, "blobs", c.req.param("blobId"));
     if (!existsSync(blobPath)) return c.json({ error: "Blob not found" }, 404);
 
-    const { size } = await stat(blobPath);
-    const webStream = Readable.toWeb(createReadStream(blobPath)) as ReadableStream;
-
-    return new Response(webStream, {
-        headers: {
-            "Content-Type": "application/octet-stream",
-            "Content-Length": String(size),
-        }
-    });
+    const data = await readFile(blobPath);
+    return new Response(data, { headers: { "Content-Type": "application/octet-stream" } });
 });
 
 app.delete("/stash/:id/blob/:blobId", async c => {
     const id = c.req.param("id");
 
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const blobId = c.req.param("blobId");
+    if (!/^[a-f0-9]{32}$/i.test(blobId)) {
+        return c.json({ error: "Invalid blob id" }, 400);
+    }
+
     const path = join(STASHES_ROOT, id, "blobs", blobId);
     if (!existsSync(path)) return c.json({ error: "Blob not found" }, 404);
 
+    const storedSize = (await stat(path)).size;
     const blobIndex = await readBlobIndex(id);
     const indexed = blobIndex[blobId];
-    const storedSize = indexed?.storedSize ?? (await stat(path)).size;
     const originalSize = indexed?.originalSize ?? storedSize;
 
     await unlink(path);
-
     delete blobIndex[blobId];
     await writeBlobIndex(id, blobIndex);
 
@@ -700,25 +721,34 @@ app.delete("/stash/:id/blob/:blobId", async c => {
 app.delete("/stash/:id/blobs", async c => {
     const id = c.req.param("id");
 
-    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
-
-    const { blobIds } = await c.req.json<{ blobIds: string[] }>();
-
-    if (!Array.isArray(blobIds) || blobIds.some(blobId => typeof blobId !== "string")) {
-        return c.json({ error: "Invalid blobIds" }, 400);
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
     }
 
-    const blobIndex = await readBlobIndex(id);
+    if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
+
+    const body = await c.req.json().catch(() => ({})) as { blobIds?: string[] };
+    const blobIds = Array.isArray(body.blobIds) ? body.blobIds : [];
+
+    if (!blobIds.length) {
+        return c.json({ error: "Missing blobIds" }, 400);
+    }
+
+    if (blobIds.some(blobId => typeof blobId !== "string" || !/^[a-f0-9]{32}$/i.test(blobId))) {
+        return c.json({ error: "Invalid blob id" }, 400);
+    }
 
     let freedOriginalBytes = 0;
     let freedStoredBytes = 0;
+
+    const blobIndex = await readBlobIndex(id);
 
     for (const blobId of blobIds) {
         const path = join(STASHES_ROOT, id, "blobs", blobId);
         if (!existsSync(path)) continue;
 
+        const storedSize = (await stat(path)).size;
         const indexed = blobIndex[blobId];
-        const storedSize = indexed?.storedSize ?? (await stat(path)).size;
         const originalSize = indexed?.originalSize ?? storedSize;
 
         await unlink(path);
@@ -746,6 +776,10 @@ app.delete("/stash/:id/blobs", async c => {
 app.get("/stash/:id/devices", async c => {
     const id = c.req.param("id");
 
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     const session = await getSession(c, id);
     if (!session) return c.json({ error: "Unauthorized" }, 401);
 
@@ -761,6 +795,10 @@ app.get("/stash/:id/devices", async c => {
 
 app.post("/stash/:id/devices", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
 
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
@@ -808,6 +846,10 @@ app.patch("/stash/:id/devices/:deviceId", async c => {
     const id = c.req.param("id");
     const deviceId = c.req.param("deviceId");
 
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const { name } = await c.req.json<{ name: string }>();
@@ -844,6 +886,10 @@ app.patch("/stash/:id/devices/:deviceId", async c => {
 app.delete<"/stash/:id/devices/:deviceId">("/stash/:id/devices/:deviceId", async c => {
     const id = c.req.param("id");
     const deviceId = c.req.param("deviceId");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
 
     const session = await getSession(c, id);
     if (!session) return c.json({ error: "Unauthorized" }, 401);
@@ -886,6 +932,10 @@ app.delete<"/stash/:id/devices/:deviceId">("/stash/:id/devices/:deviceId", async
 app.get("/stash/:id/quota", async c => {
     const id = c.req.param("id");
 
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;
@@ -896,6 +946,11 @@ app.get("/stash/:id/quota", async c => {
 
 app.post("/stash/:id/access-code", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const body = await c.req.json<{
@@ -910,7 +965,7 @@ app.post("/stash/:id/access-code", async c => {
 
     for (const [k, v] of accessCodes) if (v.stashId === id) accessCodes.delete(k);
 
-    const code = randomBytes(3).toString("hex").toUpperCase();
+    const code = randomBytes(16).toString("base64url");
     accessCodes.set(code, {
         stashId: id,
         expiresAt: Date.now() + 10 * 60 * 1000,
@@ -922,6 +977,10 @@ app.post("/stash/:id/access-code", async c => {
 app.put("/stash/:id/access-code/:code", async c => {
     const id = c.req.param("id");
     const code = c.req.param("code").toUpperCase();
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
 
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
@@ -1005,6 +1064,11 @@ app.post("/stash/join/:token", async c => {
 
 app.get("/stash/:id/sync-status", async c => {
     const id = c.req.param("id");
+
+    if (typeof id !== "string" || !/^[a-f0-9]{32}$/i.test(id)) {
+        return c.json({ error: "Invalid stash id" }, 400);
+    }
+
     if (!(await auth(c, id))) return c.json({ error: "Unauthorized" }, 401);
 
     const reg = JSON.parse(await readFile(REGISTRY_PATH, "utf-8")) as Registry;

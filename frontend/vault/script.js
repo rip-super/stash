@@ -574,15 +574,6 @@ function clearSelectionPreview() {
     }
 }
 
-function escapeHtml(value = "") {
-    return value
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
-}
-
 function removeCachedBlob(blobId) {
     const cached = state.fileCache.get(blobId);
     if (!cached) return;
@@ -784,6 +775,15 @@ function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function escapeHtml(value = "") {
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+}
+
 // #endregion
 
 // #region Icons
@@ -919,7 +919,7 @@ function renderBreadcrumbs() {
             data-crumb-index="${index}"
             ${isLast ? 'aria-current="page"' : ""}
           >
-            ${crumb.name}
+            ${escapeHtml(crumb.name)}
           </button>
           ${isLast ? "" : '<span class="crumb-sep">/</span>'}
         `;
@@ -983,11 +983,11 @@ async function renderList() {
 
         const nameContent = isRenaming
             ? `<input type="text" class="rename-input" id="rename-input-${item.id}"
-                 value="${item.name.replace(/"/g, "&quot;")}"
+                 value="${escapeHtml(item.name)}"
                  autocomplete="off" spellcheck="false" />`
             : `<div class="row-copy">
-                <span class="row-name">${item.name}</span>
-                ${item.searchPath ? `<span class="row-path">${item.searchPath}</span>` : ""}
+                <span class="row-name">${escapeHtml(item.name)}</span>
+                ${item.searchPath ? `<span class="row-path">${escapeHtml(item.searchPath)}</span>` : ""}
                </div>`;
 
         return `<button
@@ -1426,21 +1426,21 @@ function renderDevices() {
                                 type="text"
                                 class="device-inline-input"
                                 id="device-rename-input-${device.id}"
-                                value="${device.name.replace(/"/g, "&quot;")}"
+                                value="${escapeHtml(device.name)}"
                                 autocomplete="off"
                                 spellcheck="false"
                            />`
-                : `<h3 class="device-name">${device.name}${isCurrentDevice ? `<span class="device-self-pill">This device</span>` : ""}</h3>`
+                : `<h3 class="device-name">${escapeHtml(device.name)}${isCurrentDevice ? `<span class="device-self-pill">This device</span>` : ""}</h3>`
             }
 
                     <div class="device-row-actions">
-                        <button type="button" class="device-icon-btn rename-device-btn" data-id="${device.id}" aria-label="Rename ${device.name}">
+                        <button type="button" class="device-icon-btn rename-device-btn" data-id="${device.id}" aria-label="Rename ${escapeHtml(device.name)}">
                             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
                                 <path d="M4 20h4l10-10-4-4L4 16v4zM13 7l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
                             </svg>
                         </button>
                         ${isCurrentDevice ? "" : `
-                        <button type="button" class="remove-device-btn" data-id="${device.id}" aria-label="Remove ${device.name}">
+                        <button type="button" class="remove-device-btn" data-id="${device.id}" aria-label="Remove ${escapeHtml(device.name)}">
                             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
                                 <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
                             </svg>
