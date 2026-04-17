@@ -69,7 +69,7 @@ async function createStash() {
     try {
         const stashKey = await generateStashKey();
         const stashKeyBytes = await exportKeyBytes(stashKey);
-        const stashId = crypto.randomUUID();
+        const stashId = crypto.randomUUID().replace(/-/g, "");
 
         const authVerifier = await getAuthVerifier(stashKeyBytes);
 
