@@ -965,7 +965,7 @@ app.post("/stash/:id/access-code", async c => {
 
     for (const [k, v] of accessCodes) if (v.stashId === id) accessCodes.delete(k);
 
-    const code = randomBytes(16).toString("base64url");
+    const code = randomBytes(3).toString("hex").toUpperCase();
     accessCodes.set(code, {
         stashId: id,
         expiresAt: Date.now() + 10 * 60 * 1000,
