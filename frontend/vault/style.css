@@ -1510,6 +1510,7 @@ body::-webkit-scrollbar-corner,
     font-family: "Bricolage Grotesque", sans-serif;
     font-size: 2rem;
     letter-spacing: 0.16em;
+    font-variant-numeric: slashed-zero;
 }
 
 .access-code-expiry {
