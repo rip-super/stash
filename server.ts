@@ -68,6 +68,7 @@ const QUOTA = 500 * 1024 * 1024;
 
 const STASHES_ROOT = "./stashes";
 const REGISTRY_PATH = join(STASHES_ROOT, "registry.json");
+const SESSIONS_PATH = join(STASHES_ROOT, "sessions.json");
 
 const MAX_TOTAL_STORAGE = 50 * 1024 * 1024 * 1024;
 
@@ -1089,6 +1090,15 @@ if (!existsSync(REGISTRY_PATH)) {
     await writeFile(REGISTRY_PATH, JSON.stringify({ stashes: {} }, null, 4));
 }
 
+if (existsSync(SESSIONS_PATH)) {
+    const raw = await readFile(SESSIONS_PATH, "utf-8");
+    const data = JSON.parse(raw) as Record<string, any>;
+
+    for (const [k, v] of Object.entries(data)) {
+        sessions.set(k, v);
+    }
+}
+
 await cleanupExpiredTempUploads().catch(error => {
     console.error("Initial temp cleanup failed:", error);
 });
@@ -1103,6 +1113,36 @@ await cleanupStaleStashes().catch(err => console.error("Initial stash reap faile
 setInterval(() => {
     cleanupStaleStashes().catch(err => console.error("Stash reap failed:", err));
 }, 6 * 60 * 60 * 1000);
+
+let writingSessions = false;
+setInterval(async () => {
+    if (writingSessions) return;
+    writingSessions = true;
+
+    const now = Date.now();
+    for (const [k, v] of sessions) {
+        if (v.expiresAt < now) sessions.delete(k);
+    }
+
+    await writeFile(SESSIONS_PATH, JSON.stringify(Object.fromEntries(sessions.entries()), null, 4));
+    writingSessions = false;
+}, 5000);
+
+process.on("SIGINT", async () => {
+    if (!writingSessions) {
+        writingSessions = true;
+        await writeFile(SESSIONS_PATH, JSON.stringify(Object.fromEntries(sessions.entries()), null, 4));
+    }
+    process.exit();
+});
+
+process.on("SIGTERM", async () => {
+    if (!writingSessions) {
+        writingSessions = true;
+        await writeFile(SESSIONS_PATH, JSON.stringify(Object.fromEntries(sessions.entries()), null, 4));
+    }
+    process.exit();
+});
 
 serve({ fetch: app.fetch, port: 6003 }, info => {
     console.log(`Listening at http://localhost:${info.port}`);
